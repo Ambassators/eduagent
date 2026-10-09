@@ -1,0 +1,232 @@
+/* Adapted from SpeakEasy (apps/desktop/src/renderer/ui/orb.css).
+ *
+ * The mic's face, shared by the dashboard, the overlay pill and the phone: a disc of the "AI"
+ * gradient with soft puffs of colour billowing inside it and white mist drifting across; Orb.tsx
+ * speeds it all up during a session, most while it hears you. The palette
+ * shifts with the session (set `data-tone` on the button): violet-blue while idle or listening,
+ * warmer while it hears you, cooler while it reads aloud. A halo element with `.orb-glow` gets the
+ * same gradient as a blurred, shape-shifting glow; the halo keeps its own opacity/transform for the state.
+ */
+
+@property --ai-1 {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #5b21e6;
+}
+@property --ai-2 {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #1d4ed8;
+}
+@property --ai-3 {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #22e5ff;
+}
+@property --ai-4 {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #ff3d9a;
+}
+
+/* White mist (SVG fractal noise), drawn once larger than the orb and panned across it. */
+:root {
+  --cloud-1: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n' x='0' y='0'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.018' numOctaves='4' seed='3' /%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 3 0 0 0 -1.25'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  --cloud-2: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n' x='0' y='0'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='4' seed='11' /%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 2.6 0 0 0 -1.05'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+[data-tone] {
+  transition:
+    --ai-1 700ms ease,
+    --ai-2 700ms ease,
+    --ai-3 700ms ease,
+    --ai-4 700ms ease;
+}
+[data-tone='capturing'] {
+  --ai-1: #a0129e;
+  --ai-2: #6d28d9;
+  --ai-3: #ffb020;
+  --ai-4: #ff2e5b;
+}
+[data-tone='speaking'] {
+  --ai-1: #3124c9;
+  --ai-2: #0369d9;
+  --ai-3: #2ff5c8;
+  --ai-4: #c77dff;
+}
+
+.orb {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  isolation: isolate;
+  container-type: size;
+  background: linear-gradient(140deg, color-mix(in oklab, var(--ai-1) 75%, #0a0520), color-mix(in oklab, var(--ai-2) 80%, #0a0520));
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.16),
+    inset 0 -8px 16px -6px rgb(20 0 60 / 0.35),
+    0 8px 24px -6px color-mix(in srgb, var(--ai-1) 50%, transparent);
+  pointer-events: none;
+}
+/* Soft top light so it reads as a surface, not a flat swatch. */
+.orb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(120% 70% at 50% 0%, rgb(255 255 255 / 0.28), transparent 55%);
+}
+
+/* The puffs slowly turn as a group, on top of each one's own drift. */
+.orb .swirl {
+  position: absolute;
+  inset: -15%;
+  animation: orb-spin 22s linear infinite;
+}
+
+/* Puffs of colour: a solid core with a soft edge, each swelling and drifting on its own clock. */
+.orb i {
+  position: absolute;
+  width: 64%;
+  height: 64%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, var(--c) 30%, color-mix(in oklab, var(--c) 45%, transparent) 70%, transparent);
+  animation:
+    orb-billow 7s ease-in-out infinite alternate,
+    orb-drift 11s ease-in-out infinite;
+}
+.orb i:nth-child(1) {
+  --c: var(--ai-3);
+  top: 2%;
+  left: 0;
+}
+.orb i:nth-child(2) {
+  --c: var(--ai-4);
+  right: 0;
+  bottom: 2%;
+  animation-duration: 9s, 13s;
+  animation-delay: -4s, -3s;
+}
+.orb i:nth-child(3) {
+  --c: color-mix(in oklab, var(--ai-4) 55%, var(--ai-1));
+  top: 28%;
+  left: 24%;
+  width: 52%;
+  height: 52%;
+  animation-duration: 6s, 10s;
+  animation-delay: -2s, -6s;
+}
+.orb i:nth-child(4) {
+  --c: var(--ai-1);
+  top: 0;
+  right: 4%;
+  width: 48%;
+  height: 48%;
+  animation-duration: 8s, 12s;
+  animation-delay: -5s, -8s;
+}
+.orb i:nth-child(5) {
+  --c: color-mix(in oklab, var(--ai-3) 50%, var(--ai-4));
+  bottom: 0;
+  left: 8%;
+  width: 50%;
+  height: 50%;
+  animation-duration: 10s, 14s;
+  animation-delay: -1s, -10s;
+}
+
+/* Mist: two layers of cloud at different scales, drifting different ways (parallax). */
+.orb .mist {
+  position: absolute;
+  inset: 0;
+  background: var(--cloud-1) 0% 0% / 260% 260% no-repeat;
+  opacity: 0.2;
+  animation: orb-mist 18s ease-in-out infinite alternate;
+}
+.orb .mist + .mist {
+  background-image: var(--cloud-2);
+  background-size: 320% 320%;
+  background-position: 100% 100%;
+  opacity: 0.14;
+  animation: orb-mist-back 26s ease-in-out infinite alternate;
+}
+
+/* The glyph on top of the orb. */
+.orb + svg {
+  position: relative;
+  z-index: 1;
+  color: #fff;
+  filter: drop-shadow(0 1px 3px rgb(20 0 60 / 0.5));
+}
+
+.orb-glow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: conic-gradient(from 0deg, var(--ai-1), var(--ai-2), var(--ai-3), var(--ai-4), var(--ai-1));
+  filter: blur(10px);
+  animation:
+    orb-shape 8s ease-in-out infinite,
+    orb-spin 9s linear infinite;
+}
+
+@keyframes orb-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+@keyframes orb-shape {
+  0%,
+  100% {
+    border-radius: 42% 58% 63% 37% / 45% 38% 62% 55%;
+  }
+  33% {
+    border-radius: 63% 37% 38% 62% / 56% 63% 37% 44%;
+  }
+  66% {
+    border-radius: 37% 63% 55% 45% / 63% 42% 58% 37%;
+  }
+}
+@keyframes orb-billow {
+  from {
+    scale: 0.8;
+  }
+  to {
+    scale: 1.2;
+  }
+}
+@keyframes orb-mist {
+  to {
+    background-position: 100% 60%;
+  }
+}
+@keyframes orb-mist-back {
+  to {
+    background-position: 0% 20%;
+  }
+}
+@keyframes orb-drift {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  33% {
+    translate: 14% -10%;
+  }
+  66% {
+    translate: -10% 12%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb .swirl,
+  .orb i,
+  .orb .mist,
+  .orb-glow::before {
+    animation: none !important;
+  }
+  .orb-glow::before {
+    border-radius: 50%;
+  }
+}
