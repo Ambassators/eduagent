@@ -13,12 +13,18 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
-    "build": "npm run typecheck && vite build && tsc -p tsconfig.main.json && node scripts/copy-pdf-assets.mjs",
+    "build": "npm run typecheck && vite build && tsc -p tsconfig.main.json && node scripts/copy-pdf-assets.mjs && node scripts/copy-voice-assets.mjs && node scripts/copy-browser-assets.mjs",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:glasstex": "npm run build && node scripts/glasstex-smoke.mjs",
     "start": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist:mac": "npm run build && electron-builder --mac --publish never",
     "dist:win": "npm run build && electron-builder --win --publish never",
-    "dist:linux": "npm run build && electron-builder --linux --publish never"
+    "dist:linux": "npm run build && electron-builder --linux --publish never",
+    "extensions": "node scripts/copy-browser-assets.mjs",
+    "test:browser": "electron scripts/browser-smoke.mjs",
+    "test:browser:ui": "electron scripts/browser-ui-smoke.mjs",
+    "test:extensions": "node scripts/browser-extension-smoke.mjs"
   },
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
@@ -28,6 +34,7 @@
     "@napi-rs/canvas": "^1.0.10",
     "@openai/codex": "0.160.1",
     "@pdf-lib/fontkit": "^1.1.1",
+    "@ricky0123/vad-web": "0.0.31",
     "@xmldom/xmldom": "^0.9.12",
     "adm-zip": "^0.6.1",
     "docx": "^9.9.0",
@@ -36,6 +43,7 @@
     "mammoth": "^1.13.0",
     "marked": "^18.1.0",
     "mermaid": "^12.1.0",
+    "onnxruntime-web": "1.22.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.4.299",
     "react": "19.3.0",
@@ -45,7 +53,8 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "sanitize-html": "^2.18.0",
-    "word-extractor": "^1.0.4"
+    "word-extractor": "^1.0.4",
+    "ws": "^8.22.0"
   },
   "overrides": {
     "katex": "$katex",
@@ -60,6 +69,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/sanitize-html": "^2.16.2",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^6.0.0",
     "electron": "44.7.0",
     "electron-builder": "26.15.3",

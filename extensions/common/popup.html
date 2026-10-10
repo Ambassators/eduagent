@@ -1,0 +1,6 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Codex Voice Bridge</title><link rel="stylesheet" href="popup.css"></head><body>
+<h1>Codex Voice Bridge</h1><p id="status" role="status">Checking connection…</p>
+<p>Share this web app with Codex Voice to let Think read and interact with its page. Sharing ends when you stop it, close the tab, or navigate to another site.</p>
+<button id="share">Share current tab</button><button id="unshare">Stop sharing current tab</button>
+<details id="setup"><summary>Pair with the desktop app</summary><label>Local endpoint<input id="endpoint" value="ws://127.0.0.1:48765/bridge"></label><label>Pairing key<input id="token" type="password" autocomplete="off" placeholder="Copy from Browser → Extensions"></label><button id="pair">Pair</button></details>
+<p>To copy cookies into the desktop browser, enable access here, then use Browser → Import cookies in the app. Cookie values transfer locally.</p><button id="cookies">Enable cookie import</button><button id="disconnect">Disconnect and clear sharing</button><script src="popup.js"></script></body></html>

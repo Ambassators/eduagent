@@ -29,7 +29,11 @@ const ICONS: Record<string, string> = {
   check: 'M5 12.5l4.5 4.5L19 7',
   refresh: 'M4 12a8 8 0 0 1 13.7-5.7L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 0 1-13.7 5.7L4 15.5M4 20v-4.5h4.5',
   wave: 'M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4',
-  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4'
+  globe: 'M21 12a9 9 0 1 0-18 0 9 9 0 0 0 18 0zM3 12h18M12 3c4 5 4 13 0 18M12 3c-4 5-4 13 0 18',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
+  'new-chat': 'M20 12v4H9l-5 4V5h9M18 3v6M15 6h6',
+  history: 'M3.5 12a8.5 8.5 0 1 0 2.5-6L3.5 8.5M3.5 4v4.5H8M12 7.5V12l3 2',
+  trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3'
 };
 
 export default function Icon({ name, size = 20 }: { name: string; size?: number }) {

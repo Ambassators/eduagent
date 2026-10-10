@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src data:; worker-src blob:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>GlassTeX Editor</title>
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="editor.css">
+  <script defer src="vendor/mathlive/mathlive.min.js"></script>
+  <script defer src="vendor/katex/katex.min.js"></script>
+  <script defer src="tex.js"></script>
+  <script defer src="auto-math.js"></script>
+  <script defer src="solver-worker-source.js"></script>
+  <script defer src="catalogue.js"></script>
+  <script defer src="document-selection.js"></script>
+  <script defer src="host.js"></script>
+  <script defer src="editor.js"></script>
+</head>
+<body>
+  <main id="page" aria-label="LaTeX document" role="document"></main>
+  <p id="fatal" role="alert" hidden></p>
+  <div id="live-region" role="status" aria-live="polite" class="visually-hidden"></div>
+</body>
+</html>

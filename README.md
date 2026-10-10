@@ -32,11 +32,26 @@ Supported previews and extraction:
 - Legacy DOC and ODT: text preview and context; rewriting can create a new DOCX.
 - TXT, Markdown, code, JSON, CSV, XML, and other text files: readable previews; TXT/Markdown/HTML can be edited in the workspace.
 - RTF: text preview; direct editing is disabled to preserve its format.
+- TeX (`.tex`, `.ltx`, `.latex`): the integrated GlassTeX visual editor, full source editing, and local math calculations.
 - PNG/JPEG/WebP/GIF/BMP: image preview. Think can inspect the image visually.
 - HTML/SVG: sanitized static preview. Only deliberately generated demonstrations execute scripts.
 - Other binary formats can be opened as file metadata, with an explicit notice when no decoder exists.
 
 Up to 40 open files, 100 MB per file. The first 500 PDF pages are indexed; later pages remain viewable and can be read individually by tools. Large documents send a bounded excerpt and current page as live context; Think can fetch other ranges. Scanned PDFs have no extracted text: their first page is provided as visual context to Think, and additional pages can be inspected with `read_file(includeImage:true)`. Voice receives their metadata and can delegate visual questions to Think. Password-protected/encrypted PDFs may not be editable.
+
+## GlassTeX
+
+Opening a TeX file splits the left sidebar's available file area into two equal-height sections: files above, GlassTeX commands below. Both sections scroll independently. Switching to another file restores the usual file list. The command sidebar stays visible beside presentations at smaller window widths.
+
+GlassTeX includes the original visual document editor and 443 feature templates, structural MathLive equations, prose, tables, lists, algorithm blocks, automatic equation detection, a bounded local solver, KaTeX preview, and LaTeX/JavaScript/TSX/JSON inspectors. Search or filter commands, create/edit/delete custom templates, and right-click a command to assign a shortcut or copy its template. Settings persist locally.
+
+Use **Full source** to edit the whole document. Visual edits preserve unrelated source, comments, preamble, line endings, and Unicode. TeX files must be UTF-8 and at most 8 MiB. Edits persist immediately to the workspace working copy; **Save copy** and **Save original** use the app's existing save and backup workflow. Think can read and edit the current TeX working copy.
+
+**Export to PDF** prints a separate snapshot of the GlassTeX rendering. It uses the bundled renderer; package processing and full TeX compilation are outside GlassTeX's rendering support. Unrecognized source fragments remain editable and preserved in the document.
+
+Shortcuts: Cmd/Ctrl+Enter inserts an equation, Shift+Cmd/Ctrl+Enter inserts inline math, Cmd/Ctrl+K searches features, Shift+Cmd/Ctrl+L toggles source, Shift+Cmd/Ctrl+P toggles preview, and Shift+Cmd/Ctrl+I toggles the inspector. Cmd/Ctrl+S saves the original with a backup; Shift+Cmd/Ctrl+S saves a copy. Cmd/Ctrl+Alt+E exports PDF.
+
+Run `npm test` for unit tests and `npm run test:glasstex` for the isolated Electron integration check. GlassTeX and its bundled MathLive/KaTeX licenses are retained in `src/renderer/public/glasstex`.
 
 ## Voice and Think
 
@@ -116,3 +131,29 @@ Implementation: `src/main/documents.ts` owns extraction and staged edits; `src/m
 References: [Codex app-server](https://learn.chatgpt.com/docs/app-server), [GPT-Live delegation](https://developers.openai.com/api/docs/guides/live-delegation), [ChatGPT Voice](https://learn.chatgpt.com/docs/features/voice), [Electron window materials](https://www.electronjs.org/docs/latest/api/base-window).
 
 This is an independent application. Codex, Electron, PDF.js, document libraries, and the bundled OFL font retain their respective licenses.
+
+## Chromium browser and external web apps
+
+Use **Browser** in the left rail to open the embedded Chromium workspace. It supports multiple tabs, back/forward history, reload/stop, an address/search bar, website popups as new tabs, downloads with a save dialog, and opening a page in your default browser. Tabs and cookies persist between launches in a separate browser session. Use **Documents** or select a file to return to the document viewer. Remote pages run without Node.js or the app's IPC preload. Website media, notification, geolocation, and other permission requests are currently denied; enter passwords and select upload files directly in the page.
+
+Think can use `browser_tabs`, `browser_open`, `browser_navigate`, `browser_read`, and `browser_act`. The same tools support explicitly shared external browser tabs. Reading returns bounded page text and visible controls with CSS selectors; actions support clicking, filling text, selecting options, and scrolling. Password values are redacted and password/file fields cannot be filled by tools. DOM access is limited to the top frame: browser-internal pages, cross-origin frames, canvas-only controls, and native desktop interfaces need separate adapters. Some websites may reject Electron's browser or synthetic clicks.
+
+To connect Chrome, Chromium, Edge, Brave, or Firefox:
+
+1. In the app, choose **Browser → Extensions → Export extensions…** and select a destination. The build also creates ready-to-load folders at `dist/extensions/chromium` and `dist/extensions/firefox` (`npm run extensions` refreshes them).
+2. Chromium browsers: open their extensions page (e.g. `chrome://extensions`), enable Developer mode, choose **Load unpacked**, and select the Chromium extension folder.
+3. Firefox: open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**, and select the Firefox folder's `manifest.json`. Temporary extensions are removed at restart. Permanent Firefox distribution requires signing through Mozilla; Chrome/Edge store distribution requires publishing separately.
+4. In the desktop app, choose **Show pairing details**. Open the extension popup and paste the endpoint and pairing key into **Pair with the desktop app**. Click **Pair**. Keep the pairing key private.
+5. Visit the web app you want to use and choose **Share current tab** in the extension. Ask Think to inspect or interact with that shared tab. The extension badge counts shared tabs. **Stop sharing current tab** immediately removes access for future commands.
+
+To import cookies, pair the source Chrome/Chromium or Firefox profile as above. In its extension popup, click **Enable cookie import** and accept the browser's optional cookie/site permissions. In the desktop app, choose **Browser → Import cookies**, then **Import cookies** beside the connected source. Cookie values transfer in bounded local batches into the embedded browser session; only imported/skipped/failed counts reach the UI. Reload open tabs afterward. Matching cookies are overwritten. Cookie values never enter chat or Think/voice context. Disable cookie import in the extension popup to revoke its cookie/site permission.
+
+Import uses the source profile's default, non-private cookie store and retains host/domain scope, path, HTTP-only/secure/SameSite flags, expiration, and session status. It skips partitioned cookies, Firefox containers/first-party isolated cookies, expired/invalid entries, and entries beyond 20,000 per import. Session cookies remain session cookies. Site storage and passwords are not imported; some sites bind sessions to a device or require additional storage and may still need a sign-in. This avoids reading encrypted browser databases or accessing system keychains.
+
+The bridge binds only to `127.0.0.1`, using port `48765` or an available local port when that port is occupied. Copy the endpoint displayed by the app. It requires a 256-bit pairing key and rejects ordinary website origins. No web-page script can call its app IPC. The extension uses `activeTab` access, exposes only shared tabs, excludes private/incognito tabs, and revokes sharing on an origin change or tab closure. In-flight actions may already have happened when sharing is revoked; read the page before retrying a timed-out operation. The app's **Disconnect** revokes that browser origin until the pairing key is reset. **Reset pairing key** disconnects all browsers and requires them to pair again. Reconnect is automatic after normal app restarts, but never restores a tab's access across a browser restart.
+
+Shared page content is sent to the signed-in Think backend when a browser read is requested, just as document content is sent when read. Tab titles and URLs are provided as quiet voice context. Pairing keys remain outside model context and browser pages. Think is instructed to follow the current user request, treat page content as untrusted data, and obtain explicit authorization for consequential submissions. These instructions are model policy, not a per-click application approval gate.
+
+Verification: `npm test` covers URL/action validation and real local WebSocket authentication, routing, disconnect, and key rotation. After `npm run build`, run `npm run test:browser` for a separate real Electron/Chromium smoke test using a temporary profile and local fixture page. This verifies batched cookie imports (including HTTP-only cookies and session isolation), navigation, page snapshots, fill/select/click, redaction, history, view visibility, and tab cleanup. Run `npm run test:browser:ui` for the production renderer/preload, browser controls, and cookie import panel. These tests do not install an extension into your personal browser. The optional `npm run test:extensions` test requires Playwright and its Chromium runtime (or `PLAYWRIGHT_MODULE` pointing to an existing Playwright module). It loads a copy of the extension in a temporary profile and verifies actual pairing, cookie batches, page actions, unsharing, and revocation. This automated test grants the optional cookie permissions at installation time in the temporary copy; accepting permission prompts through the normal popup still requires an interactive browser. Firefox worker behavior is covered by API fixture tests and Mozilla extension linting; a live Firefox install has not been tested.
+
+Implementation references: [Electron WebContentsView](https://www.electronjs.org/docs/latest/api/web-contents-view), [Chrome extension WebSocket lifecycle](https://developer.chrome.com/docs/extensions/how-to/web-platform/websockets), [Firefox scripting API](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/scripting/executeScript), [Firefox signing](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/).

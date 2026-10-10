@@ -48,6 +48,13 @@
   --ai-3: #ffb020;
   --ai-4: #ff2e5b;
 }
+/* Dusky and quiet until the session is live, so connecting never reads as listening. */
+[data-tone='connecting'] {
+  --ai-1: #4d4a66;
+  --ai-2: #3a4058;
+  --ai-3: #9ea8c2;
+  --ai-4: #857f9e;
+}
 [data-tone='speaking'] {
   --ai-1: #3124c9;
   --ai-2: #0369d9;
@@ -153,11 +160,68 @@
 }
 
 /* The glyph on top of the orb. */
-.orb + svg {
+.orb + svg,
+.orb + .orb-spinner,
+.orb + .orb-bars {
   position: relative;
   z-index: 1;
   color: #fff;
   filter: drop-shadow(0 1px 3px rgb(20 0 60 / 0.5));
+}
+
+/* Connecting: a ring chasing its tail where the mic would be. */
+.orb-spinner {
+  width: 30%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 2.5px solid rgb(255 255 255 / 0.28);
+  border-top-color: #fff;
+  animation: orb-spin 0.9s linear infinite;
+}
+
+/* Listening: an equalizer that sways on its own and stretches with the live level (--level). */
+.orb-bars {
+  display: flex;
+  align-items: center;
+  gap: 9%;
+  width: 34%;
+  height: 32%;
+  transform: scaleY(min(1.45, calc(1 + var(--level, 0) * 6)));
+  transition: transform 90ms linear;
+}
+.orb-bars i {
+  flex: 1;
+  height: 100%;
+  border-radius: 99px;
+  background: currentColor;
+  scale: 1 0.4;
+  animation: orb-bar 1.3s ease-in-out infinite;
+}
+.orb-bars i:nth-child(1),
+.orb-bars i:nth-child(5) {
+  height: 40%;
+}
+.orb-bars i:nth-child(2),
+.orb-bars i:nth-child(4) {
+  height: 70%;
+}
+.orb-bars i:nth-child(2) {
+  animation-delay: -0.2s;
+}
+.orb-bars i:nth-child(3) {
+  animation-delay: -0.4s;
+}
+.orb-bars i:nth-child(4) {
+  animation-delay: -0.6s;
+}
+.orb-bars i:nth-child(5) {
+  animation-delay: -0.8s;
+}
+[data-tone='capturing'] .orb-bars i {
+  animation-duration: 0.55s;
+}
+[data-tone='speaking'] .orb-bars i {
+  animation-duration: 0.8s;
 }
 
 .orb-glow::before {
@@ -171,6 +235,68 @@
     orb-spin 9s linear infinite;
 }
 
+/* The mini Think orb: spat out of the big orb while Think works, swallowed again when it finishes. */
+.orb-wrap { position: relative; display: grid; margin: 6px 0 18px; }
+.orb-wrap > .mic-button { margin: 0; }
+.orb-wrap.spitting > .mic-button .face { animation: orb-gulp 0.45s cubic-bezier(0.3, 0.7, 0.4, 1.4); }
+.think-orb-root { display: contents; }
+.think-orb-anchor { position: absolute; z-index: 3; left: 98%; top: 4%; width: 34px; height: 34px; translate: -50% -50%; }
+.think-orb-anchor.working { animation: orb-spit-x 0.55s cubic-bezier(0.2, 0.8, 0.3, 1) both, orb-spit-y 0.55s cubic-bezier(0.4, -0.6, 0.6, 1) both; }
+.think-orb-anchor.working .think-orb { animation: orb-spit-scale 0.55s cubic-bezier(0.3, 0.7, 0.4, 1.5) both; }
+.think-orb-anchor.leaving { animation: orb-swallow 0.38s cubic-bezier(0.6, 0, 0.8, 0.4) forwards; pointer-events: none; }
+.think-orb { position: relative; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; cursor: pointer; background: none; transition: transform 0.12s ease; }
+.think-orb:hover { transform: scale(1.1); }
+.think-orb:active { transform: scale(0.94); }
+.think-orb:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* Muted next to the big orb, so it reads as a helper rather than a second voice. */
+.think-orb .orb { filter: saturate(0.4) brightness(1.08); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.22), 0 3px 10px -4px rgb(30 25 60 / 0.35); }
+.think-orb .orb-spinner { width: 46%; border-width: 2px; }
+.think-orb .icon { position: relative; z-index: 1; color: #fff; animation: pop 0.25s ease; }
+.think-orb-card { position: absolute; z-index: 20; left: 50%; top: calc(100% + 8px); translate: -50% 0; width: min(240px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 5px; padding: 8px 8px 6px 10px; text-align: left; border-radius: 10px; background: var(--sheet); color: var(--ink); box-shadow: 0 0 0 1px var(--rule-2), 0 12px 28px -12px rgb(0 0 0 / 0.35); animation: rise 0.2s ease both; overflow: hidden; }
+.think-orb-card header { display: flex; align-items: center; justify-content: space-between; min-height: 20px; }
+.think-orb-card header .section-label { display: flex; gap: 6px; padding: 0; }
+.think-orb-card header .icon-button { width: 22px; height: 22px; }
+.think-orb-task, .think-orb-now > span, .think-orb-steps span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.think-orb-task { margin: 0; font-size: 11px; line-height: 1.4; color: var(--ink-2); }
+.think-orb-now { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; font-size: 11px; font-weight: 600; line-height: 1.4; }
+.think-orb-now .writing-dot { flex-shrink: 0; width: 5px; height: 5px; }
+.think-orb-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.think-orb-steps li { display: flex; gap: 6px; align-items: center; min-width: 0; font-size: 10px; line-height: 1.45; color: var(--ink-2); }
+.think-orb-steps li > i { flex: 0 0 5px; height: 5px; border-radius: 50%; background: var(--ok); }
+.think-orb-steps li.running { color: var(--ink); font-weight: 600; }
+.think-orb-steps li.running small { font-weight: 400; }
+.think-orb-steps li.running > i { background: var(--accent); animation: breathe 1.2s ease-in-out infinite; }
+.think-orb-steps li.failed > i { background: var(--danger); }
+.think-orb-steps span { min-width: 0; }
+.think-orb-steps span::first-letter { text-transform: uppercase; }
+.think-orb-steps small { margin-left: 5px; color: var(--ink-3); font-size: 10px; }
+.think-orb-preview { margin: 0; padding: 5px 7px; border-radius: 6px; background: var(--sheet-2); color: var(--ink-3); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.think-orb-preview > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.think-orb-card footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 10px; color: var(--ink-3); }
+.think-orb-card footer button { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; padding: 2px 4px; border: 0; border-radius: 5px; background: none; color: var(--accent-text); font-size: 10px; font-weight: 600; cursor: pointer; }
+.think-orb-card footer button:hover { background: var(--sheet-2); }
+@media (max-height: 820px) { .orb-wrap { margin: 0; } }
+
+@keyframes orb-gulp {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.1, 0.9); }
+  65% { transform: scale(0.95, 1.05); }
+  100% { transform: scale(1); }
+}
+@keyframes orb-spit-x {
+  from { left: 50%; }
+}
+@keyframes orb-spit-y {
+  from { top: 50%; }
+}
+@keyframes orb-spit-scale {
+  0% { scale: 0.15; opacity: 0; }
+  20% { opacity: 1; }
+  100% { scale: 1; opacity: 1; }
+}
+@keyframes orb-swallow {
+  to { left: 50%; top: 50%; scale: 0.1; opacity: 0; }
+}
 @keyframes orb-spin {
   to {
     rotate: 1turn;
@@ -186,6 +312,11 @@
   }
   66% {
     border-radius: 37% 63% 55% 45% / 63% 42% 58% 37%;
+  }
+}
+@keyframes orb-bar {
+  50% {
+    scale: 1 1;
   }
 }
 @keyframes orb-billow {
@@ -223,7 +354,11 @@
   .orb .swirl,
   .orb i,
   .orb .mist,
-  .orb-glow::before {
+  .orb-glow::before,
+  .orb-bars i,
+  .orb-wrap.spitting > .mic-button .face,
+  .think-orb-anchor,
+  .think-orb-anchor .think-orb {
     animation: none !important;
   }
   .orb-glow::before {

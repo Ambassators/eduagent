@@ -99,12 +99,12 @@ export default function DocumentViewer({file,onError,annotations,voice}:{file:Do
   const sanitized=content?.html?DOMPurify.sanitize(content.html,{FORBID_TAGS:['script','iframe','form','object','embed','style'],FORBID_ATTR:['style'],ADD_DATA_URI_TAGS:['img']}):'';
   const annotationCount=annotations.overlays.filter(item=>item.fileId===file.id).length+annotations.highlights.filter(item=>item.fileId===file.id).length+(annotations.pointer?.fileId===file.id?1:0);
   return <div className="document-view">
-    <div className="doc-toolbar"><div className="doc-title"><span className={`file-glyph small ${file.kind}`}>{file.extension.slice(1).toUpperCase().slice(0,4)}</span><strong title={file.originalPath||file.name}>{file.name}</strong></div><div className="doc-actions">
+    <div className="doc-toolbar drag"><div className="doc-title"><span className={`file-glyph small ${file.kind}`}>{file.extension.slice(1).toUpperCase().slice(0,4)}</span><strong title={file.originalPath||file.name}>{file.name}</strong></div><div className="doc-actions">
       {file.kind==='pdf'&&<><span className="page-count">{page}<em>/</em>{pdf?.numPages??file.pageCount??'…'}</span>
       {annotationCount>0&&<button className="quiet-button" title="Clear temporary overlays, highlights, and pointing" onClick={()=>void window.desktop!.dismissPDFAnnotation().catch(error=>errorRef.current(error.message))}><Icon name="close" size={14}/>Clear overlays</button>}
       <div className="control-group"><button title="Zoom out" aria-label="Zoom out" disabled={zoom<=.5} onClick={()=>setZoom(old=>Math.max(.5,old-.15))}><Icon name="minus" size={14}/></button><span>{Math.round(zoom*100)}%</span><button title="Zoom in" aria-label="Zoom in" disabled={zoom>=2} onClick={()=>setZoom(old=>Math.min(2,old+.15))}><Icon name="plus" size={14}/></button></div></>}
-      {editable&&<button className="quiet-button" onClick={()=>setEditing(old=>!old)}><Icon name={editing?'eye':'edit'} size={14}/>{editing?'Preview':'Edit'}</button>}
-      <button className="quiet-button" onClick={()=>void window.desktop!.saveDocument(file.id,false).catch(error=>errorRef.current(error.message))}><Icon name="download" size={14}/>Save copy</button>
+      {editable&&<button className="quiet-button" title={editing?'Preview':'Edit'} onClick={()=>setEditing(old=>!old)}><Icon name={editing?'eye':'edit'} size={14}/>{editing?'Preview':'Edit'}</button>}
+      <button className="quiet-button" title="Save copy" onClick={()=>void window.desktop!.saveDocument(file.id,false).catch(error=>errorRef.current(error.message))}><Icon name="download" size={14}/>Save copy</button>
       {file.dirty&&file.originalPath&&<button className="quiet-button strong" title="A timestamped backup is created first" onClick={()=>void window.desktop!.saveDocument(file.id,true).catch(error=>errorRef.current(error.message))}><Icon name="save" size={14}/>Save original</button>}
     </div></div>
     {file.warning&&<div className="document-warning">{file.warning}</div>}

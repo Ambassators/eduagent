@@ -7,6 +7,8 @@ export interface QuizQuestionView {
   topic: string;
   difficulty: 1 | 2 | 3;
   choices?: string[];
+  /** Written by the coach in response to the learner's previous answer. */
+  followUp?: boolean;
 }
 export interface QuizQuestion extends QuizQuestionView {
   correctIndex?: number;
@@ -56,5 +58,9 @@ export interface QuizState {
     stats: QuizStats;
     coachBusy: boolean;
     coachError: string | null;
+    /** Follow-up mode (an opt-in setting): the coach writes the next question after every answer. */
+    followUps: boolean;
+    /** The answered question still awaiting its follow-up; the panel waits before moving on. */
+    followUpPending: boolean;
   } | null;
 }

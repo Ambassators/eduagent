@@ -1,0 +1,184 @@
+:root {
+  color-scheme: light dark;
+  --paper: #ffffff;
+  --ink: #232323;
+  --prose-ink: #45464b;
+  --muted: #7b7f87;
+  --accent: #317bda;
+  --selection: rgba(49,123,218,.15);
+  --math-size: 22px;
+  --document-leading: 1.25;
+  --equation-gap: .4em;
+  --equation-min-height: 1.6em;
+  --list-gap: .4em;
+  --item-gap: .35em;
+  --nested-list-gap: .2em;
+  --block-gap: .6em;
+}
+:root[data-spacing="comfortable"] {
+  --document-leading: 1.5;
+  --equation-gap: .7em; --equation-min-height: 2.2em;
+  --list-gap: .55em; --item-gap: .45em; --nested-list-gap: .25em;
+  --block-gap: .8em;
+}
+:root[data-spacing="spacious"] {
+  --document-leading: 1.8;
+  --equation-gap: 1em; --equation-min-height: 2.8em;
+  --list-gap: .7em; --item-gap: .6em; --nested-list-gap: .3em;
+  --block-gap: 1em;
+}
+:root[data-spacing="custom"] {
+  --document-leading: var(--custom-line-spacing, 1.25);
+  --block-gap: var(--custom-block-spacing, .6em);
+  --equation-gap: var(--custom-equation-spacing, .4em);
+  --equation-min-height: 1.6em;
+  --item-gap: var(--custom-list-spacing, .35em);
+  --list-gap: var(--custom-block-spacing, .6em);
+  --nested-list-gap: var(--custom-list-spacing, .35em);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-appearance="light"]):not([data-appearance="dark"]) { --paper:#1b1c1e; --ink:#ececee; --prose-ink:#d0d1d5; --muted:#91959e; --accent:#7aaff3; --selection:rgba(122,175,243,.2); }
+}
+:root[data-appearance="light"] { color-scheme:light; }
+:root[data-appearance="dark"] {
+  color-scheme:dark;
+  --paper:#1b1c1e; --ink:#ececee; --prose-ink:#d0d1d5; --muted:#91959e; --accent:#7aaff3; --selection:rgba(122,175,243,.2);
+}
+* { box-sizing: border-box; }
+html { min-height:100%; background:var(--paper); }
+body { margin:0; color:var(--prose-ink); font:17px/var(--document-leading) 'New York','Iowan Old Style','Palatino Linotype',Palatino,serif; }
+#page { min-height:100vh; max-width:960px; margin:0 auto; padding:34px clamp(24px,5vw,64px) 100px; overflow-wrap:anywhere; }
+.text-run { white-space:pre-wrap; min-height:1em; outline:none; border-radius:0; }
+.text-run:focus { background:var(--selection); }
+.text-run:empty::before { content:' '; white-space:pre; }
+/* An empty inline span has no native caret box, even with generated ::before
+   content. WebKit then reveals Backspace's selection at document origin.
+   Give only empty editing hosts a box; populated prose keeps normal wrapping. */
+span.text-run:empty { display:inline-block; }
+h1,h2,h3 { font-family:inherit; font-weight:600; line-height:1.35; margin:1.1em 0 .4em; }
+h1 { font-size:1.62em; } h2 { font-size:1.25em; } h3 { font-size:1.08em; }
+.math-wrap { position:relative; max-width:100%; }
+.math-wrap.display { display:flex; justify-content:center; align-items:center; gap:10px; margin:var(--equation-gap) 0; min-height:var(--equation-min-height); }
+.math-wrap.inline { display:inline-flex; align-items:baseline; vertical-align:baseline; margin:0 1px; }
+math-field { display:inline-block; min-width:1.4em; max-width:100%; background:transparent; color:var(--ink); font-size:var(--math-size); border:0; border-radius:0; outline:0; padding:0; box-shadow:none;
+  --hue:213; --contains-highlight-background-color:transparent;
+  --selection-background-color:var(--selection); --caret-color:var(--accent);
+  --smart-fence-color:var(--accent); --placeholder-color:var(--muted);
+  --focused-shadow:none; --highlight-text:var(--ink);
+}
+.math-wrap.inline math-field { font-size:1.05em; }
+.math-wrap.inline:not(.empty) math-field { min-width:0; }
+/* MathLive pads the right edge for its caret; inline, that reads as a space before punctuation. */
+.math-wrap.inline math-field::part(content) { padding-left:0; padding-right:1px; }
+math-field::part(virtual-keyboard-toggle), math-field::part(menu-toggle) { display:none; }
+math-field::part(container) { border:0; padding:0; outline:0; box-shadow:none; background:transparent; }
+math-field:focus-within { outline:none; box-shadow:none; }
+.math-preview { display:none; outline:none; }
+.preview .math-preview { display:block; cursor:text; }
+.preview math-field { display:none; }
+.preview .inline .math-preview { display:inline-block; }
+.math-preview .katex-display { margin:0; }
+.preview .ghost { display:none !important; }
+.math-preview .katex { font-size:var(--math-size); }
+.inline .math-preview .katex { font-size:1.05em; }
+.ghost { display:none; color:var(--muted); opacity:.72; font-size:18px; white-space:nowrap; pointer-events:none; }
+.ghost.visible { display:inline-flex; align-items:center; gap:8px; }
+.ghost .hint { font:10px/1.5 -apple-system,BlinkMacSystemFont,sans-serif; border:1px solid currentColor; border-radius:4px; padding:1px 4px; letter-spacing:.03em; }
+.math-wrap.inline .ghost { font-size:14px; }
+.source-fragment { display:block; width:100%; white-space:pre-wrap; overflow-wrap:anywhere; outline:none; font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--muted); padding:4px 0; background:transparent; border:0; }
+.source-fragment:focus { color:var(--ink); }
+.source-fragment[contenteditable=true]:focus { background:var(--selection); }
+.source-fragment::selection { background:var(--selection); }
+.empty-instruction { font:15px/1.7 -apple-system,BlinkMacSystemFont,sans-serif; color:var(--muted); padding:10px 0; }
+#fatal { white-space:pre-wrap; font:14px/1.8 -apple-system,BlinkMacSystemFont,sans-serif; margin:32px; }
+.visually-hidden { position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }
+::selection { background:var(--selection); }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior:auto!important; animation:none!important; transition:none!important; } }
+@media print { .ghost,.empty-instruction { display:none!important; } #page {padding:0;max-width:none;} }
+.document-list { padding-left:2em; margin:var(--list-gap) 0; }
+.document-list > li { padding-left:.3em; margin:var(--item-gap) 0; position:relative; }
+.document-list .document-list { margin:var(--nested-list-gap) 0; }
+.document-list > li.custom-label { list-style:none; }
+.list-label { position:absolute; right:calc(100% + .35em); white-space:nowrap; }
+.description-list { list-style:none; }
+.description-list .list-label { position:static; margin-right:.5em; }
+/* Use the serif family's Black face for a clear weight difference from prose. */
+.format-textbf,strong.list-label { font-weight:900; color:var(--ink); }
+.format-texttt { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.88em; }
+.format-textsf { font-family:-apple-system,BlinkMacSystemFont,sans-serif; }
+.code-block { display:flex; max-width:100%; overflow-x:auto; margin:var(--block-gap) 0; padding:16px 20px; border-left:3px solid var(--accent); background:var(--selection); }
+.code-block:focus-within { box-shadow:inset 0 0 0 1px var(--accent); }
+.code-listing,.code-line-numbers { white-space:pre; overflow-wrap:normal; tab-size:4; font:14px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--ink); margin:0; padding:0; }
+.code-listing { flex:1; min-width:1em; outline:none; }
+.code-line-numbers { flex:none; text-align:right; padding-right:24px; user-select:none; -webkit-user-select:none; color:var(--muted); }
+.numbers-right .code-line-numbers { order:1; padding-right:0; padding-left:24px; }
+
+.document-center { text-align:center; margin:var(--block-gap) 0; }
+.document-flushleft { text-align:left; margin:var(--block-gap) 0; }
+.document-flushright { text-align:right; margin:var(--block-gap) 0; }
+.document-quote { margin:var(--block-gap) 0; padding:.3em 1.3em; border-left:3px solid var(--muted); }
+.table-scroll { max-width:100%; overflow-x:auto; margin:var(--block-gap) 0; }
+/* Like tabular, a table has its natural width and follows the surrounding alignment. */
+.document-table { display:inline-table; border-collapse:collapse; }
+.document-table td { min-width:5em; padding:6px 12px; vertical-align:top; }
+/* Faint guides show editable cells; the source's | and \hline rules are drawn solid. */
+#page:not(.preview) .document-table td { border:1px dashed color-mix(in srgb, var(--muted) 40%, transparent); }
+#page .document-table td.rule-left { border-left:1px solid var(--ink); }
+#page .document-table td.rule-right { border-right:1px solid var(--ink); }
+#page .document-table td.rule-top { border-top:1px solid var(--ink); }
+#page .document-table td.rule-bottom { border-bottom:1px solid var(--ink); }
+#page .document-table td.rule-left-double { border-left:3px double var(--ink); }
+#page .document-table td.rule-right-double { border-right:3px double var(--ink); }
+#page .document-table td.rule-top-double { border-top:3px double var(--ink); }
+#page .document-table td.rule-bottom-double { border-bottom:3px double var(--ink); }
+.document-pagebreak { margin:1.4em 0; border-top:1px dashed color-mix(in srgb, var(--muted) 55%, transparent); }
+.document-table .text-run:empty { display:inline-block; min-width:1em; }
+.document-linebreak { display:block; }
+/* \\ on an otherwise empty line ends that empty line. */
+.document-linebreak + .document-linebreak { min-height:calc(var(--document-leading) * 1em); }
+.format-size-tiny { font-size:.5em; }
+.format-size-scriptsize { font-size:.7em; }
+.format-size-footnotesize { font-size:.8em; }
+.format-size-small { font-size:.9em; }
+.format-size-normalsize { font-size:1em; }
+.format-size-large { font-size:1.2em; }
+.format-size-Large { font-size:1.44em; }
+.format-size-LARGE { font-size:1.728em; }
+.format-size-huge { font-size:2.074em; }
+.format-size-Huge { font-size:2.488em; }
+.document-algorithm { margin:var(--block-gap) 0; border-top:1px solid var(--muted); border-bottom:1px solid var(--muted); }
+.document-algorithm-caption { padding:.4em .5em; border-bottom:1px solid var(--muted); }
+.algorithm-label,.algorithm-keyword { font-weight:700; color:var(--ink); }
+.document-algorithmic { padding:.5em .6em; background:var(--selection); }
+.document-algorithm-line { display:flex; align-items:baseline; line-height:1.45; }
+.algorithm-line-number { flex:0 0 2.5em; padding-right:.75em; text-align:right; font-size:.8em; color:var(--muted); user-select:none; -webkit-user-select:none; }
+.algorithm-line-content { flex:1; min-width:0; padding-left:calc(var(--algorithm-indent) * 1.5em); }
+/* LaTeX's enumerate labels: 1.  (a)  i.  A. */
+@counter-style tex-paren-alpha { system:extends lower-alpha; prefix:"("; suffix:") "; }
+ol.document-list ol.document-list { list-style-type:tex-paren-alpha; }
+ol.document-list ol.document-list ol.document-list { list-style-type:lower-roman; }
+ol.document-list ol.document-list ol.document-list ol.document-list { list-style-type:upper-alpha; }
+
+/* Cross-element selections use one overlay so shadow-root equations and prose
+   receive the same highlight without altering the editable document DOM. */
+.document-selection { position:fixed; inset:0; pointer-events:none; z-index:20; }
+.document-selection > div { position:absolute; background:var(--selection); }
+#page.has-document-selection ::selection { background:transparent; }
+#page:focus { outline:none; }
+#page.has-document-selection .text-run:focus,
+#page.has-document-selection .source-fragment:focus { background:transparent; }
+
+/* PDF export uses an isolated preview, with paper colors in every app theme. */
+.pdf-export { color-scheme:light; --paper:#fff; --ink:#000; --prose-ink:#000; --muted:#555; --selection:transparent; }
+.pdf-export body { font-size:12pt; }
+.pdf-export #page { padding:0; margin:0; max-width:none; min-height:0!important; }
+.pdf-export .ghost,.pdf-export .empty-instruction,.pdf-export .document-selection { display:none!important; }
+.pdf-export .document-pagebreak { border:0; margin:0; break-after:page; }
+.pdf-export .text-run:focus { background:transparent; }
+.pdf-export .table-scroll,.pdf-export .code-block { overflow:visible; }
+.pdf-export .code-listing { white-space:pre-wrap; overflow-wrap:anywhere; }
+@media print {
+  .pdf-export h1,.pdf-export h2,.pdf-export h3,.pdf-export .document-algorithm-caption { break-after:avoid; }
+  .pdf-export .math-wrap,.pdf-export tr,.pdf-export .document-algorithm-line { break-inside:avoid; }
+  .pdf-export #page { orphans:3; widows:3; }
+}
