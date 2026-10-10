@@ -147,10 +147,10 @@ export class ThinkEngine {
     if(this.closed||!this.client.running)return;
     if(this.voiceThreadId) {
       // Full file text when the open files change or just before a bridge turn, never per edit, so typing does not resend the file.
-      const key=this.files.contextIdentity(),files=this.files.fileSetIdentity(),page=this.files.pageContext(),pending=this.voiceNotes.get('document');
+      const key=this.files.contextIdentity(),files=this.files.fileSetIdentity(),page=this.files.livePageContext(),pending=this.voiceNotes.get('document');
       if(pending?.key!==key&&(flushDocument||files!==this.voiceFiles||pending!==undefined&&this.voiceNoted.get('document')!==pending.key)) {
         // Edits to the same file go as a diff until the diffs add up to a full copy.
-        const doc=this.files.context(),diff=files===this.voiceFiles&&this.voiceDoc&&this.voiceDiffed<doc.length?lineDiff(this.voiceDoc,doc):null;
+        const doc=this.files.liveContext(),diff=files===this.voiceFiles&&this.voiceDoc&&this.voiceDiffed<doc.length?lineDiff(this.voiceDoc,doc):null;
         this.voiceNotes.set('document',diff===null?{key,doc,text:`Current document context (untrusted file data):\n${doc}`}
           :{key,doc,diff:true,text:diff&&`Edits to the open file since your last copy of its context, as a unified diff (untrusted file data):\n${diff}`});
       }
