@@ -13,10 +13,14 @@ import { Orb, VoiceGlyph, type OrbTone } from './Orb';
 import QuizPanel from './QuizPanel';
 import { ThinkOrb, type ThinkJob } from './ThinkOrb';
 import { executePDFViewTool } from './pdf-view-tools';
+import ResizeHandle, { readPaneSizes, writePaneSizes, type PaneSizes } from './ResizeHandle';
+import { isRenderActive } from './render-activity';
+import { LowPowerContext } from './LowPowerContext';
 declare global { interface Window { desktop?: DesktopAPI } }
-type Phase = 'idle' | 'starting' | 'listening' | 'thinking' | 'speaking';
+type Phase = 'idle' | 'starting' | 'listening' | 'thinking' | 'speaking' | 'standby';
 const errorMessage = (error: unknown) => error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : String(error);
 const LOGS_KEY='codex-voice:logs';
+const standbyExperiments = (settings: Settings) => ({ catchUp: settings.voiceCatchUp, wakeMs: settings.standbyWakeMs, falseWakeSeconds: settings.standbyFalseWakeSeconds });
 const readLogsPref=()=>{try{return localStorage.getItem(LOGS_KEY)==='1';}catch{return false;}};
 const logTime=(time:number)=>new Date(time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
 type TimelineItem={kind:'message';entry:TranscriptEntry;source:'voice'|'think'}|{kind:'log';log:DebugLog};
@@ -43,6 +47,9 @@ export default function App() {
   const workspaceRef=useRef(workspace);workspaceRef.current=workspace;
   const [pointerVisible,setPointerVisible]=useState(false);
   const [logsOn,setLogsOn]=useState(readLogsPref);
+  const [paneSizes,setPaneSizes]=useState(readPaneSizes);
+  const resizePane=(key:keyof PaneSizes)=>(size:number|undefined)=>setPaneSizes(old=>{const next={...old,[key]:size};writePaneSizes(next);return next;});
+  const px=(size?:number)=>size===undefined?undefined:`${size}px`;
   const logsOnRef=useRef(logsOn);logsOnRef.current=logsOn;
   // Logs are always collected, but only copied into state while visible so they do not re-render the app.
   const logBuffer=useRef<DebugLog[]>([]);
@@ -74,7 +81,15 @@ export default function App() {
   const mutedRef = useRef(false);
   const [speaker, setSpeaker] = useState(true);
   const speakerRef = useRef(true);
-  const [level, setLevel] = useState(0);
+  const voiceStage = useRef<HTMLDivElement>(null);
+  const visualLevel = useRef(0);
+  const showLevel = useCallback((value: number) => {
+    if (!isRenderActive()) return;
+    const next = Math.round(value * 100) / 100;
+    if (next === visualLevel.current) return;
+    visualLevel.current = next;
+    voiceStage.current?.style.setProperty('--level', String(next));
+  }, []);
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const entriesRef=useRef(entries);entriesRef.current=entries;
   const [input, setInput] = useState('');
@@ -96,16 +111,18 @@ export default function App() {
   const echo = useRef(new EchoFilter());
   const groups = useRef(new CaptionGroups());
   const lastOutput = useRef(0);
+  /** Bridge or Think work in flight; standby waits so results can still be spoken. */
+  const backendWorking = useRef(false);
   const changePhase = useCallback((value: Phase) => {
     if (phaseRef.current !== value) { phaseRef.current = value; setPhase(value); }
   }, []);
   const endSession = useCallback(async () => {
     operation.current += 1; sessionRef.current = false; setSessionOn(false);
     call.current?.close(); call.current = null;
-    changePhase('idle'); setLevel(0); groups.current.reset();
+    changePhase('idle'); showLevel(0); groups.current.reset();
     try { await api().stopVoice(); await api().interrupt(); }
     catch (e) { setError(errorMessage(e)); }
-  }, [changePhase]);
+  }, [changePhase, showLevel]);
   const refresh = useCallback(async (quiet = false) => {
     setLoading(true); if (!quiet) setError('');
     try { const [next,files] = await Promise.all([api().status(),api().workspace()]); setStatus(next); setDraft(next.settings);setWorkspace(files);setBrowserState(await api().browserState()); }
@@ -157,19 +174,23 @@ export default function App() {
     mutedRef.current = false; setMuted(false); lastOutput.current = 0; groups.current.reset();
     const current = new VoiceSession(api(), {
       event: event => { if (token === operation.current) handleLive(event); },
-      connected: () => { if (token === operation.current) changePhase('listening'); },
+      connected: () => { if (token === operation.current) changePhase(mutedRef.current ? 'idle' : 'listening'); },
+      standby: asleep => { if (token === operation.current) changePhase(asleep ? 'standby' : 'starting'); },
       speech: () => { if (token === operation.current) void api().pointer(pointerContext()).catch(() => {}); },
       level: (mic, output) => {
         if (token !== operation.current) return;
+        if (phaseRef.current === 'standby' || phaseRef.current === 'starting') { showLevel(mic); return; }
         const now = Date.now();
         if (output > 0.035) lastOutput.current = now;
-        setLevel(Math.max(mic, output));
+        showLevel(Math.max(mic, output));
         if (now - lastOutput.current < 400) changePhase('speaking');
         else if (phaseRef.current !== 'thinking' || now - groups.current.last > 2500) changePhase(mutedRef.current ? 'idle' : 'listening');
       },
       error: e => { if (token === operation.current) { setError(errorMessage(e)); void endSession(); } }
-    });
+    }, () => !typedPending.current && !backendWorking.current && (phaseRef.current === 'listening' || phaseRef.current === 'idle'));
     call.current = current; current.muteOutput(!speakerRef.current);
+    current.setStandby(status?.settings.standbyAfterSeconds ?? 0);
+    if (status) current.setExperiments(standbyExperiments(status.settings));
     try {
       await current.start(status?.settings.inputDevice ?? '');
       if (token !== operation.current) { current.close(); return; }
@@ -180,7 +201,7 @@ export default function App() {
       current.close(); call.current = null; sessionRef.current = false; setSessionOn(false); changePhase('idle');
       setError(errorMessage(e)); await api().stopVoice().catch(() => {});
     }
-  }, [status, handleLive, changePhase, endSession]);
+  }, [status, handleLive, changePhase, endSession, showLevel]);
   const send = useCallback(async (raw: string) => {
     if (typedPending.current) return;
     const message=raw.trim();typedPending.current=true;setBackendBusy(true);setError('');
@@ -233,7 +254,7 @@ export default function App() {
           if(presentation.placement==='side')setPresentationId(presentation.id);break;
         }
         case 'appearance/changed':setStatus(old=>old?{...old,darkMode:Boolean(p.darkMode)}:old);break;
-        case 'think/state':setWorkspace(old=>old?{...old,thinking:p.state as unknown as WorkspaceState['thinking']}:old);break;
+        case 'think/state':{const state=p.state as {busy?:boolean;delegating?:boolean;queued?:number};backendWorking.current=!!(state.busy||state.delegating||state.queued);}setWorkspace(old=>old?{...old,thinking:p.state as unknown as WorkspaceState['thinking']}:old);break;
         case 'think/started':setThinkJob({id:String(p.jobId),message:String(p.message??''),startedAt:Date.now()});setThinkMessages(old=>[...old,{id:String(p.jobId),role:'user',text:String(p.message),time:Date.now(),final:true}]);break;
         case 'think/delta': {
           const id=String(p.itemId);
@@ -278,7 +299,8 @@ export default function App() {
         case 'thread/realtime/error':
           setError(String(p.message ?? 'Subscription voice could not start.')); void endSession(); break;
         case 'thread/realtime/closed':
-          if (sessionRef.current && phaseRef.current !== 'starting') {
+          // Standby closes the live session on purpose; it reconnects when the user speaks.
+          if (sessionRef.current && phaseRef.current !== 'starting' && phaseRef.current !== 'standby') {
             setNotice('The live voice session ended. Start again to reconnect.'); void endSession();
           } break;
         case 'account/login/completed':
@@ -293,7 +315,9 @@ export default function App() {
       }
     });
   }, [changePhase, endSession, refresh]);
-  useEffect(() => { transcriptBottom.current?.scrollIntoView({ behavior: 'smooth' }); }, [entries,thinkMessages,logs]);
+  useEffect(() => { call.current?.setStandby(status?.settings.standbyAfterSeconds ?? 0); }, [status?.settings.standbyAfterSeconds]);
+  useEffect(() => { if (status) call.current?.setExperiments(standbyExperiments(status.settings)); }, [status]);
+  useEffect(() => { if (isRenderActive()) transcriptBottom.current?.scrollIntoView({ behavior: 'smooth' }); }, [entries,thinkMessages,logs]);
   useEffect(() => { if (settingsOpen) dialogRef.current?.showModal(); else dialogRef.current?.close(); }, [settingsOpen]);
   useEffect(() => { if (historyOpen) historyRef.current?.showModal(); else historyRef.current?.close(); }, [historyOpen]);
   useEffect(() => { const close = () => call.current?.close(); window.addEventListener('beforeunload', close); return () => { window.removeEventListener('beforeunload', close); close(); }; }, []);
@@ -350,8 +374,8 @@ export default function App() {
     const timer = setTimeout(() => void refresh(true), delay);
     return () => clearTimeout(timer);
   }, [accountState, refresh]);
-  const title: Record<Phase, string> = { idle: muted && sessionOn ? 'Take your time.' : 'A little room\nto think aloud.', starting: 'One moment.', listening: 'I’m listening.', thinking: 'I’m listening.', speaking: 'Let’s talk.' };
-  const caption: Record<Phase, string> = { idle: muted && sessionOn ? 'Your microphone is muted. Unmute whenever you’re ready.' : 'Bring a question. Follow a thought. See where it goes.', starting: 'Connecting your subscription voice session…', listening: 'Speak naturally. You can interrupt by talking.', thinking: 'Speak naturally. You can interrupt by talking.', speaking: 'Keep talking whenever a thought comes to you.' };
+  const title: Record<Phase, string> = { idle: muted && sessionOn ? 'Take your time.' : 'A little room\nto think aloud.', starting: 'One moment.', standby: 'Standing by.', listening: 'I’m listening.', thinking: 'I’m listening.', speaking: 'Let’s talk.' };
+  const caption: Record<Phase, string> = { idle: muted && sessionOn ? 'Your microphone is muted. Unmute whenever you’re ready.' : 'Bring a question. Follow a thought. See where it goes.', starting: 'Connecting your subscription voice session…', standby: 'Voice is paused to save usage. Start talking and it reconnects.', listening: 'Speak naturally. You can interrupt by talking.', thinking: 'Speak naturally. You can interrupt by talking.', speaking: 'Keep talking whenever a thought comes to you.' };
   const buttonLabel = sessionOn ? 'End voice (Esc)' : 'Start a conversation';
   const activeFile=workspace?.files.find(file=>file.id===workspace.activeId);
   const presentation=workspace?.artifacts.find(item=>item.id===presentationId);
@@ -376,11 +400,12 @@ export default function App() {
   const closeFile=(id:string)=>void flushTeX(id).then(()=>api().closeFile(id)).then(setWorkspace).catch(e=>setError(errorMessage(e)));
   const fileMeta=(file:DocumentInfo)=>file.dirty?'Edited copy':file.pageCount?`${file.pageCount} ${file.pageCount===1?'page':'pages'}`:file.kind==='binary'?`${Math.max(1,Math.round(file.size/1024))} KB`:file.kind;
   const live=sessionOn&&phase!=='starting';
-  const tone:OrbTone=!sessionOn?'idle':phase==='starting'?'connecting':phase==='speaking'?'speaking':phase==='thinking'?'capturing':'on';
+  const tone:OrbTone=!sessionOn||phase==='standby'?'idle':phase==='starting'?'connecting':phase==='speaking'?'speaking':phase==='thinking'?'capturing':'on';
   const materials:[Settings['transparency'],string][]=platform==='win32'?[['acrylic','Acrylic'],['mica','Mica'],['opaque','Opaque']]:[['acrylic','Glass'],['opaque','Opaque']];
-  return <div className={`studio ${status?.darkMode?'dark':'light'} ${status?.settings.transparency??'acrylic'} platform-${platform}`} onDragOver={event=>{event.preventDefault();if(event.dataTransfer.types.includes('Files'))setDropActive(true);}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node))setDropActive(false);}} onDrop={event=>void dropFiles(event)}>
-    <div className={`workspace ${presentation||quizOpen?'with-presentation':''} ${!browserVisible&&activeFile?.kind==='tex'?'with-tex-document':''}`}>
+  return <LowPowerContext.Provider value={status?.settings.lowPowerMode ?? false}><div className={`studio ${status?.darkMode?'dark':'light'} ${status?.settings.transparency??'acrylic'} platform-${platform}`} onDragOver={event=>{event.preventDefault();if(event.dataTransfer.types.includes('Files'))setDropActive(true);}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node))setDropActive(false);}} onDrop={event=>void dropFiles(event)}>
+    <div className={`workspace ${presentation||quizOpen?'with-presentation':''} ${!browserVisible&&activeFile?.kind==='tex'?'with-tex-document':''}`} style={{'--left-w':px(paneSizes.left),'--right-w':px(paneSizes.right),'--present-w':px(paneSizes.present),'--tex-h':px(paneSizes.tex)} as React.CSSProperties}>
       <aside className="rail rail-left">
+        <ResizeHandle edge="right" min={200} shrinks=".document-column" keep={340} label="Resize sidebar" onResize={resizePane('left')}/>
         <div className="rail-top drag"/>
         <button className="open-files" onClick={()=>void openFiles()} disabled={opening}>
           <span className="open-files-icon">{opening?<span className="loading-ring"/>:<Icon name="plus" size={16}/>}</span>
@@ -401,7 +426,7 @@ export default function App() {
             </div>)}
           </div>
         </div>
-        {!browserVisible&&activeFile?.kind==='tex'&&<div className="rail-tex-slot" ref={setTeXSidebar}/>}
+        {!browserVisible&&activeFile?.kind==='tex'&&<div className="rail-tex-slot"><ResizeHandle edge="top" min={160} shrinks=".rail-library-stack > .library" keep={60} label="Resize GlassTeX panel" onResize={resizePane('tex')}/><div className="rail-tex-portal" ref={setTeXSidebar}/></div>}
         </div>
         {!!workspace?.artifacts.length&&<div className="rail-section artifacts">
           <div className="section-label"><span>On screen</span><span>{workspace.artifacts.length}</span></div>
@@ -432,6 +457,7 @@ export default function App() {
       </main>
 
       {(presentation||quizOpen)&&<section className="stage stage-presentation">
+        <ResizeHandle edge="left" min={280} shrinks=".document-column" keep={340} label="Resize side view" onResize={resizePane('present')}/>
         <div className="stage-top drag"><span className="section-label"><span>{presentation?presentation.kind==='demo'?'Interactive demonstration':'On screen':'Practice'}</span></span></div>
         {presentation&&<div className="sheet presentation-sheet">
           <div className="presentation-heading"><h2 title={presentation.title}>{presentation.title}</h2><div>
@@ -445,11 +471,12 @@ export default function App() {
       </section>}
 
       <section className="rail rail-right">
+        <ResizeHandle edge="left" min={280} shrinks=".document-column" keep={340} label="Resize assistant panel" onResize={resizePane('right')}/>
         <div className="rail-top drag"><span/><button className="icon-button" title="Preferences" onClick={openSettings}><Icon name="settings" size={16}/></button></div>
-        <div className={`voice-stage ${phase} ${live?'live':''} ${muted?'muted':''}`} style={{'--level':level} as React.CSSProperties} title={caption[phase]}>
+        <div ref={voiceStage} className={`voice-stage ${phase} ${live?'live':''} ${muted?'muted':''}`} title={caption[phase]}>
           <div className={`orb-wrap ${spitting?'spitting':''}`}>
           <button className={`mic-button ${tone} ${pointerVisible?'pointing-on-page':''}`} data-tone={tone} title={pointerVisible?'Voice dot is pointing on the PDF':buttonLabel} aria-label={buttonLabel} aria-pressed={sessionOn} disabled={!sessionOn&&(!signedIn||!status?.voiceAvailable||loading)} onClick={()=>void primary().catch(e=>setError(errorMessage(e)))}>
-            <span className="halo orb-glow" aria-hidden="true" style={tone==='capturing'?{transform:`scale(${1.08+Math.min(.3,level*3)})`}:undefined}/>
+            <span className="halo orb-glow" aria-hidden="true"/>
             <span className="face" aria-hidden="true"><Orb tone={tone}/><VoiceGlyph tone={tone} muted={sessionOn&&muted} size={30}/></span>
           </button>
           <ThinkOrb busy={!!thinking?.busy} delegating={!!thinking?.delegating} compacting={!!thinking?.compacting} queued={thinking?.queued??0} job={thinkJob} activities={activities} preview={thinkPreview} onSpit={spit} onStop={()=>void api().cancelThink().catch(e=>setError(errorMessage(e)))} onOpenThink={()=>transcriptBottom.current?.scrollIntoView({behavior:'smooth'})}/>
@@ -520,6 +547,7 @@ export default function App() {
           <div className="field"><span>Appearance</span><div className="segmented" role="radiogroup" aria-label="Appearance">{([['system','System'],['light','Light'],['dark','Dark']] as const).map(([value,label])=><button type="button" role="radio" aria-checked={draft.theme===value} key={value} onClick={()=>setDraft({...draft,theme:value})}>{label}</button>)}</div></div>
           <label className="field"><span>Demonstrations</span><select value={draft.demoPlacement} onChange={event=>setDraft({...draft,demoPlacement:event.target.value as Settings['demoPlacement']})}><option value="side">Side view by default</option><option value="popup">Popup by default</option></select></label>
         </div>
+        <label className="check-setting voice-tools-setting"><input type="checkbox" name="lowPowerMode" checked={draft.lowPowerMode ?? false} onChange={event=>setDraft({...draft,lowPowerMode:event.target.checked})}/><span>Low power mode<small>Use gentler orb playback to save power. Animation pauses when the app is unfocused.</small></span></label>
       </section>
       <section className="settings-section"><h3>Think</h3>
         <div className="settings-grid">
@@ -539,6 +567,14 @@ export default function App() {
         </div>
         <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.agentTools} onChange={event=>setDraft({...draft,agentTools:event.target.checked})}/><span>Voice agent tools<small>Voice highlights, points, and reads quiz progress directly. Think still writes quizzes, explanations, and edits.</small></span></label>
         <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.bridgeResearch} onChange={event=>setDraft({...draft,bridgeResearch:event.target.checked})}/><span>Voice research<small>Voice can read open files and search the web for quick answers. Bigger work still goes to Think.</small></span></label>
+        <h4>Usage saving (experimental)</h4>
+        <div className="settings-grid">
+          <label className="field" title="Closes the live voice connection after this much quiet to save usage; talking reconnects it. 0 keeps it open."><span>Standby after (seconds, 0 = never)</span><input type="number" min={0} max={600} step={15} value={draft.standbyAfterSeconds} onChange={event=>setDraft({...draft,standbyAfterSeconds:Number(event.target.value)})}/></label>
+          <label className="field" title="How what you said while it reconnected reaches the voice. Real time adds the reconnect time to the first reply. Faster replays at 1.3× (slightly higher pitch) until caught up. Burst sends it all at once through an experimental Codex call and falls back to real time if that fails."><span>Catch-up after standby</span><select value={draft.voiceCatchUp} onChange={event=>setDraft({...draft,voiceCatchUp:event.target.value as Settings['voiceCatchUp']})}><option value="realtime">Replay in real time</option><option value="fast">Replay faster (1.3×)</option><option value="burst">Send as burst (experimental)</option></select></label>
+          <label className="field" title="How much speech it needs to hear before waking from standby. Higher ignores coughs and short noises."><span>Wake after speech of (ms)</span><input type="number" min={100} max={2000} step={50} value={draft.standbyWakeMs} onChange={event=>setDraft({...draft,standbyWakeMs:Number(event.target.value)})}/></label>
+          <label className="field" title="If a wake hears no words within this time, it goes back to standby. 0 turns it off."><span>Re-sleep on false wake (seconds, 0 = off)</span><input type="number" min={0} max={120} step={5} value={draft.standbyFalseWakeSeconds} onChange={event=>setDraft({...draft,standbyFalseWakeSeconds:Number(event.target.value)})}/></label>
+        </div>
+        <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.voiceAckFiller} onChange={event=>setDraft({...draft,voiceAckFiller:event.target.checked})}/><span>Spoken “let me check” filler<small>Off skips the acknowledgement voice says before handing a request to the bridge. Applies from the next voice connection.</small></span></label>
         <label className="field wide"><span>Voice instructions</span><textarea rows={4} maxLength={8000} value={draft.prompt} onChange={event=>setDraft({...draft,prompt:event.target.value})}/></label>
       </section>
       <details className="settings-section advanced"><summary>Advanced</summary>
@@ -547,7 +583,7 @@ export default function App() {
       {error&&<p className="dialog-error" role="alert">{error}</p>}
       <footer className="dialog-footer"><button className="button-secondary" onClick={()=>setSettingsOpen(false)}>Cancel</button><button className="button-primary" disabled={saving} onClick={()=>void saveSettings()}>{saving?'Saving…':'Save'}</button></footer>
     </dialog>
-  </div>;
+  </div></LowPowerContext.Provider>;
 }
 
 function Message({entry,source}:ChatMessage) {

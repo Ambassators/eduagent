@@ -21,6 +21,8 @@ npm run dist:mac -- --x64
 
 `.github/workflows/build.yml` builds Windows x64 and both Mac architectures when this folder is a repository root. Public Mac distribution requires your own signing and notarization credentials.
 
+In **Preferences → Window**, enable **Low power mode** for gentler microphone orb playback during voice. Normal mode plays the subtle fluid gradient at 60 fps, with soft edge shading; Low power mode uses the matching 30 fps loop. Both stay still when voice is off and pause when the window is unfocused, hidden, or minimized. Video playback also respects reduced motion and falls back to a still gradient if decoding fails. The choice is saved locally. The bundled video assets work across platforms; regenerate them on macOS with `npm run assets:orb-video`.
+
 ## Files and automatic context
 
 Open multiple files with **Open files**, Ctrl/Cmd+O, or drag and drop. Switch between the sidebar or document tabs. The selected file is automatically shared with voice as quiet context; you do not have to press Think to discuss it. File selection and PDF page changes also update the Think thread without starting a reasoning turn.

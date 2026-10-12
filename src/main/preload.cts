@@ -1,6 +1,16 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AppEvent, DesktopAPI, Settings, TranscriptEntry } from '../shared.js';
 const api: DesktopAPI = {
+  onWindowActivity: handler => {
+    let received = false, disposed = false;
+    const listener = (_event: Electron.IpcRendererEvent, active: boolean) => { received = true; handler(active); };
+    ipcRenderer.on('voice:windowActivity', listener);
+    // Subscribe before requesting the initial state; an intervening event wins.
+    void ipcRenderer.invoke('voice:windowActivity').then(active => {
+      if (!disposed && !received) handler(active);
+    }).catch(() => {});
+    return () => { disposed = true; ipcRenderer.removeListener('voice:windowActivity', listener); };
+  },
   browserState: () => ipcRenderer.invoke('voice:browserState'),
   browserOpen: url => ipcRenderer.invoke('voice:browserOpen', url),
   browserSelect: id => ipcRenderer.invoke('voice:browserSelect', id),
@@ -18,8 +28,10 @@ const api: DesktopAPI = {
   cancelLogin: () => ipcRenderer.invoke('voice:cancelLogin'),
   saveSettings: (settings: Settings) => ipcRenderer.invoke('voice:settings', settings),
   microphoneAccess: () => ipcRenderer.invoke('voice:microphone'),
-  startVoice: (sdp: string) => ipcRenderer.invoke('voice:start', sdp),
+  startVoice: (sdp: string, resume?: boolean) => ipcRenderer.invoke('voice:start', sdp, resume === true),
   stopVoice: () => ipcRenderer.invoke('voice:stop'),
+  appendVoiceAudio: (data: string, sampleRate: number) => ipcRenderer.invoke('voice:appendAudio', data, sampleRate),
+  voiceLog: (label: string, detail?: string) => ipcRenderer.invoke('voice:log', label, detail),
   interrupt: () => ipcRenderer.invoke('voice:interrupt'),
   sendText: (text: string) => ipcRenderer.invoke('voice:text', text),
   newConversation: () => ipcRenderer.invoke('voice:new'),

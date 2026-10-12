@@ -23,6 +23,12 @@ export function MermaidView({ text }: { text: string }) {
   },[text]);
   return error?<div className="rich-text-error" role="status"><strong>Diagram could not render</strong><pre>{text}</pre><small>{error}</small></div>:svg?<div className="mermaid-diagram" dangerouslySetInnerHTML={{__html:svg}}/>:<span role="status">Rendering diagram…</span>;
 }
+// remark-math only understands $…$ / $$…$$; convert LaTeX-style \(…\) and \[…\] (outside code) so they render.
+export function normalizeMath(text: string) {
+  return text.split(/(```[\s\S]*?(?:```|$)|`[^`\n]*`)/).map((part,index)=>index%2?part:part
+    .replace(/\\\[([\s\S]+?)\\\]/g,(_,math:string)=>`\n$$\n${math.trim()}\n$$\n`)
+    .replace(/\\\(([\s\S]+?)\\\)/g,(_,math:string)=>`$${math.trim()}$`)).join('');
+}
 export function RichMarkdown({ text }: { text: string }) {
   return <div className="markdown-body"><Markdown remarkPlugins={[remarkGfm,remarkMath]} rehypePlugins={[[rehypeKatex,{trust:false,throwOnError:false,maxExpand:1000}]]} components={{
     a:({href,children})=><a href={href} onClick={event=>{event.preventDefault();if(href)void window.desktop?.openURL(href);}}>{children}</a>,
@@ -30,7 +36,7 @@ export function RichMarkdown({ text }: { text: string }) {
       if(isValidElement<{className?:string;children?:unknown}>(children)&&children.props.className==='language-mermaid')return <MermaidView text={String(children.props.children??'').trim()}/>;
       return <pre>{children}</pre>;
     }
-  }}>{text}</Markdown></div>;
+  }}>{normalizeMath(text)}</Markdown></div>;
 }
 export function OverlayText({ overlay }: { overlay: PDFOverlay }) {
   if(overlay.format==='mermaid')return <MermaidView text={overlay.content}/>;

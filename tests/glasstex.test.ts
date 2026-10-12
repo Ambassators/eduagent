@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyTeXPatch, canonicalTeXShortcut, cleanTeXSettings, defaultTeXSettings, isTeXExtension } from '../src/glasstex.ts';
+import { applyTeXPatch, canonicalTeXShortcut, cleanTeXSettings, defaultTeXSettings, isTeXExtension, TeXHistory } from '../src/glasstex.ts';
 
 test('visual equation patches preserve BOM, CRLF, comments, preamble, and unrelated Unicode', () => {
   const source = '\uFEFF% keep this\r\n\\documentclass{article}\r\n\\begin{document}\r\nHello 🧮\r\n\\[1+2\\]\r\n\\end{document}\r\n';
@@ -37,4 +37,27 @@ test('stored and export preferences reject invalid types and clamp supported ran
   assert.equal(settings.appearance, 'system'); assert.equal(settings.automatic, true);
   assert.equal(settings.fontSize, 32); assert.equal(settings.customLineSpacing, 1.25);
   assert.equal(settings.customListSpacing, 0); assert.equal(settings.angleMode, 'degrees');
+});
+
+test('undo history restores sources in order, and a new edit clears redo', () => {
+  const history = new TeXHistory();
+  assert.equal(history.undo('a'), null);
+  history.record('a'); history.record('ab');
+  assert.equal(history.undo('abc'), 'ab');
+  assert.equal(history.undo('ab'), 'a');
+  assert.equal(history.undo('a'), null);
+  assert.equal(history.redo('a'), 'ab');
+  history.record('ab');
+  assert.equal(history.redo('abX'), null);
+  assert.equal(history.undo('abX'), 'ab');
+});
+
+test('undo history is bounded by count and memory but keeps the latest snapshot', () => {
+  const counted = new TeXHistory(3);
+  for (const text of ['1', '2', '3', '4', '5']) counted.record(text);
+  assert.deepEqual([counted.undo('6'), counted.undo('5'), counted.undo('4'), counted.undo('3')], ['5', '4', '3', null]);
+  const sized = new TeXHistory(200, 10);
+  sized.record('aaaa'); sized.record('bbbbbbbbbb');
+  assert.equal(sized.undo('c'), 'bbbbbbbbbb');
+  assert.equal(sized.undo('b'), null);
 });

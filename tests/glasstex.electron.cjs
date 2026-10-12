@@ -33,6 +33,7 @@ app.whenReady().then(async () => {
   await assert.rejects(store.updateText(tex.id, 'stale', 0), /document changed/);
   protocol.handle('codex-glasstex', glassTeXResponse(path.join(root, 'dist/renderer/glasstex')));
   const handlers = {
+    windowActivity: () => false,
     status: () => ({ connected: false, account: null, models: [], voices: [], voiceAvailable: false, settings: { ...defaultSettings, transparency: 'opaque' }, executable: '', platform: process.platform, darkMode: false }),
     workspace: workspaceState, document: id => store.content(id), documentBytes: id => store.bytes(id),
     updateTeXDocument: (id, source, revision) => store.updateText(id, source, revision),
@@ -74,9 +75,9 @@ app.whenReady().then(async () => {
   await ui(`document.querySelector('[aria-label="Delete Test function"]').click();document.querySelector('[aria-label="Close dialog"]').click()`);
   assert.equal(await ui(`document.querySelectorAll('.tex-feature').length`), 443);
   await editor(`window.testMessages=[];const originalPost=window.webkit.messageHandlers.editor.postMessage;window.webkit.messageHandlers.editor.postMessage=(m)=>{testMessages.push(m);originalPost(m)};const mf=document.querySelector('math-field'); mf.focus(); mf.dispatchEvent(new FocusEvent('focus'));`);
-  try { await waitFor(() => ui(`Boolean(document.querySelector('.tex-assistant button'))`), 'local calculation'); }
+  try { await waitFor(() => editor(`Boolean(GlassTeX.snapshot().suggestion?.append)`), 'local calculation'); }
   catch(error) { console.error(await editor(`JSON.stringify({fields:[...document.querySelectorAll('math-field')].map(m=>m.value),messages:testMessages,worker:typeof SOLVER_WORKER_SOURCE})`)); throw error; }
-  await ui(`document.querySelector('.tex-assistant button').click()`);
+  await editor(`GlassTeX.receive({action:'accept'})`);
   await waitFor(() => store.content(tex.id).text.includes('1+2=3'), 'accepted result persisted');
   const edited = store.content(tex.id).text;
   assert.equal(edited, original.replace('1+2', '1+2=3'), 'source fidelity');

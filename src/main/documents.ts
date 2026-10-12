@@ -168,7 +168,10 @@ export class DocumentStore {
   save(id: string, destination: string, original: boolean) { return this.edit(async () => {
     const record = this.get(id);
     if (original && record.info.originalPath) {
-      await copyFile(record.info.originalPath, `${record.info.originalPath}.codex-voice-backup-${Date.now()}`).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      const backupDirectory = path.join(this.directory, 'backups');
+      await mkdir(backupDirectory, { recursive: true, mode: 0o700 });
+      const backupPath = path.join(backupDirectory, `${record.info.id}-${Date.now()}-${randomUUID()}${record.info.extension}`);
+      await copyFile(record.info.originalPath, backupPath).catch(error => { if (error.code !== 'ENOENT') throw error; });
     }
     await writeFile(destination, record.bytes);
     record.info.originalPath = destination; record.info.name = path.basename(destination); record.info.dirty = false;

@@ -5,4 +5,6 @@ import '@fontsource-variable/schibsted-grotesk/index.css';
 import '@fontsource-variable/jetbrains-mono/index.css';
 import App from './App';
 import './styles.css';
+import { initializeRenderActivity } from './render-activity';
+initializeRenderActivity();
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);

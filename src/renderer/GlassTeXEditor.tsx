@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { DocumentInfo } from '../shared';
-import { applyTeXPatch, canonicalTeXShortcut, cleanTeXSettings, texCategoryOrder, type TeXCommand, type TeXPatch, type TeXSettings } from '../glasstex';
+import { applyTeXPatch, canonicalTeXShortcut, cleanTeXSettings, texCategoryOrder, TeXHistory, type TeXCommand, type TeXPatch, type TeXSettings } from '../glasstex';
 import catalogue from '../glasstex/commands.json';
 import { flushTeX, persistTeX } from './tex-persistence';
 import './glasstex.css';
+import { useRenderActive } from './render-activity';
 
 const ORIGIN = 'codex-glasstex://editor';
 const channel = 'codex-glasstex';
@@ -14,15 +15,13 @@ function storedCommands(): TeXCommand[] {
   const value = stored<unknown>('glasstex.commands', []);
   return Array.isArray(value) ? value.filter(command => command && ['id', 'title', 'category', 'symbol', 'latex', 'mode'].every(key => typeof command[key] === 'string')) : [];
 }
-type Inspector = { latex: string; display: boolean; append: string; note: string; javascript: string; mathjson: string };
-const emptyInspector: Inspector = { latex: '', display: true, append: '', note: 'Select an equation to calculate it.', javascript: '', mathjson: '' };
 
 export default function GlassTeXEditor({ file, sidebar, onError, onOpenFiles }: { file: DocumentInfo; sidebar: HTMLElement | null; onError: (message: string) => void; onOpenFiles: () => void }) {
+  const renderActive = useRenderActive();
   const frame = useRef<HTMLIFrameElement>(null), sourceEditor = useRef<HTMLTextAreaElement>(null), search = useRef<HTMLInputElement>(null), list = useRef<HTMLDivElement>(null);
   const [source, setSource] = useState(''), [loaded, setLoaded] = useState(false), [ready, setReady] = useState(false);
-  const [sourceMode, setSourceMode] = useState(false), [preview, setPreview] = useState(false), [showInspector, setShowInspector] = useState(true);
+  const [sourceMode, setSourceMode] = useState(false), [preview, setPreview] = useState(false);
   const [query, setQuery] = useState(''), [category, setCategory] = useState('All features');
-  const [inspector, setInspector] = useState<Inspector>(emptyInspector), [tab, setTab] = useState('LaTeX');
   const [info, setInfo] = useState({ equations: 0, rawBlocks: 0 }), [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(0), [exporting, setExporting] = useState(false), [recovering, setRecovering] = useState(false);
   const [settings, setSettings] = useState<TeXSettings>(() => cleanTeXSettings(stored('glasstex.settings', {})));
@@ -33,8 +32,12 @@ export default function GlassTeXEditor({ file, sidebar, onError, onOpenFiles }: 
   const [editingCommand, setEditingCommand] = useState<string | null>(null);
   const [shortcutCommand, setShortcutCommand] = useState<TeXCommand | null>(null), [shortcutValue, setShortcutValue] = useState('');
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const state = useRef({ source: '', revision: file.revision, undo: [] as string[], redo: [] as string[], recovering: false, loaded: false });
-  const selection = useRef({ start: 0, end: 0 });
+  // The document as this host knows it. Message handlers read it synchronously; the source,
+  // loaded and recovering states above mirror it for rendering. The visual editor in the frame
+  // holds its own copy and reports each change as a patch.
+  const doc = useRef({ source: '', revision: file.revision, loaded: false, recovering: false });
+  const history = useRef(new TeXHistory());
+  const sourceSelection = useRef({ start: 0, end: 0 });
   const mounted = useRef(true), errorRef = useRef(onError); errorRef.current = onError;
   const windows = !navigator.userAgent.includes('Mac');
   const commands: TeXCommand[] = [...catalogue, ...custom].map(command => ({ ...command, shortcut: (shortcuts[command.id] ?? command.shortcut)?.replace(windows ? /^cmd\+/ : /$^/, 'ctrl+') }));
@@ -43,53 +46,62 @@ export default function GlassTeXEditor({ file, sidebar, onError, onOpenFiles }: 
   const filtered = commands.filter(command => query.trim() ? [command.title, command.latex, command.keywords, command.category, command.id].join(' ').toLowerCase().includes(query.trim().toLowerCase()) : category === 'All features' || category === command.category);
   const send = (type: string, payload: unknown) => frame.current?.contentWindow?.postMessage({ channel, type, payload }, ORIGIN);
   const receive = (payload: object) => send('command', payload);
-  function syncDocument(initial = false) { send('document', { source: state.current.source, revision: state.current.revision, initial }); }
+  function syncDocument(initial = false) { send('document', { source: doc.current.source, revision: doc.current.revision, initial }); }
+  const editable = () => doc.current.loaded && !doc.current.recovering;
 
-  async function reload(clearHistory = true) {
+  /** Replace this host's copy with the stored working copy, e.g. after an outside change or a failed save. */
+  async function reload() {
     const content = await window.desktop!.document(file.id);
     if (!mounted.current) return;
-    Object.assign(state.current, { source: content.text, revision: content.info.revision, loaded: true, recovering: false });
-    if (clearHistory) { state.current.undo = []; state.current.redo = []; }
-    setSource(content.text); setLoaded(true); setRecovering(false); setInspector(emptyInspector); syncDocument(!loaded);
+    const initial = !doc.current.loaded;
+    Object.assign(doc.current, { source: content.text, revision: content.info.revision, loaded: true, recovering: false });
+    history.current.clear();
+    setSource(content.text); setLoaded(true); setRecovering(false);
+    syncDocument(initial);
   }
   async function recover(error: unknown) {
-    if (state.current.recovering) return;
-    state.current.recovering = true;
+    if (doc.current.recovering) return;
+    doc.current.recovering = true;
     if (mounted.current) { setRecovering(true); errorRef.current(errorMessage(error)); }
     await flushTeX(file.id).catch(() => {});
     try { await reload(); } catch (failure) { if (mounted.current) errorRef.current(errorMessage(failure)); }
   }
-  function edit(next: string, history = true, updateFrame = false) {
-    const current = state.current;
-    if (!current.loaded || current.recovering || current.source === next) return;
-    if (history) { current.undo.push(current.source); current.redo = []; }
-    // Bound source snapshots for large documents while retaining useful local undo.
-    while (current.undo.length > 200 || current.undo.length > 1 && current.undo.reduce((bytes, text) => bytes + text.length * 2, 0) > 32 * 1024 * 1024) current.undo.shift();
+  /**
+   * Apply a new source and persist it. `record` makes it undoable (undo and redo themselves
+   * do not record). `syncFrame` sends it to the visual editor, for changes the editor did not make.
+   */
+  function edit(next: string, { record = true, syncFrame = false } = {}) {
+    const current = doc.current;
+    if (!editable() || current.source === next) return;
+    if (record) history.current.record(current.source);
     const previousRevision = current.revision;
-    current.source = next; current.revision++; setSource(next); setSaving(value => value + 1);
-    if (updateFrame) syncDocument();
+    current.source = next; current.revision++;
+    setSource(next); setSaving(value => value + 1);
+    if (syncFrame) syncDocument();
     void persistTeX(file.id, next, previousRevision).catch(recover).finally(() => { if (mounted.current) setSaving(value => Math.max(0, value - 1)); });
   }
   function undo(redo = false) {
-    const current = state.current, from = redo ? current.redo : current.undo, to = redo ? current.undo : current.redo;
-    const next = from.pop(); if (next === undefined) return;
-    to.push(current.source); edit(next, false, !sourceMode);
+    if (!editable()) return;
+    const current = doc.current.source;
+    const next = redo ? history.current.redo(current) : history.current.undo(current);
+    if (next !== null) edit(next, { record: false, syncFrame: !sourceMode });
   }
   function insertText(text: string, preamble = false) {
-    const current = state.current, range = preamble ? { start: current.source.charCodeAt(0) === 0xfeff ? 1 : 0, end: current.source.charCodeAt(0) === 0xfeff ? 1 : 0 } : selection.current;
+    const current = doc.current, bom = current.source.charCodeAt(0) === 0xfeff ? 1 : 0;
+    const range = preamble ? { start: bom, end: bom } : sourceSelection.current;
     edit(current.source.slice(0, range.start) + text + current.source.slice(range.end));
-    selection.current = { start: range.start + text.length, end: range.start + text.length };
-    requestAnimationFrame(() => { sourceEditor.current?.focus(); sourceEditor.current?.setSelectionRange(selection.current.start, selection.current.end); });
+    sourceSelection.current = { start: range.start + text.length, end: range.start + text.length };
+    requestAnimationFrame(() => { sourceEditor.current?.focus(); sourceEditor.current?.setSelectionRange(sourceSelection.current.start, sourceSelection.current.end); });
   }
   function insert(command: TeXCommand) {
     if (sourceMode) {
-      const template = command.latex.replaceAll('#@', state.current.source.slice(selection.current.start, selection.current.end)).replaceAll('#?', '');
+      const template = command.latex.replaceAll('#@', doc.current.source.slice(sourceSelection.current.start, sourceSelection.current.end)).replaceAll('#?', '');
       insertText(command.mode === 'math' ? `\\(${template}\\)` : template, command.mode === 'preamble');
     } else receive({ action: 'insertCommand', command });
   }
   function equation(inline = false) { if (sourceMode) insertText(inline ? '\\(\\)' : '\n\\[\n\n\\]\n'); else receive({ action: 'insertEquation', inline }); }
   function paragraph() { if (sourceMode) insertText('\n\nNew paragraph.\n\n'); else receive({ action: 'insertParagraph' }); }
-  function togglePreview() { setSourceMode(false); setPreview(value => { receive({ action: 'preview', enabled: !value }); return !value; }); }
+  function togglePreview() { setSourceMode(false); setPreview(!preview); receive({ action: 'preview', enabled: !preview }); }
   async function save(original: boolean) { try { await flushTeX(file.id); await window.desktop!.saveDocument(file.id, original); } catch (error) { errorRef.current(errorMessage(error)); } }
   async function exportPDF() {
     if (exporting) return;
@@ -102,7 +114,6 @@ export default function GlassTeXEditor({ file, sidebar, onError, onOpenFiles }: 
     else if (action === 'palette') search.current?.focus();
     else if (action === 'source') setSourceMode(value => !value);
     else if (action === 'preview') togglePreview();
-    else if (action === 'inspector') setShowInspector(value => !value);
     else if (action === 'paragraph') paragraph();
     else if (action === 'settings') setDialog('settings');
     else if (action === 'save') void save(!!file.originalPath);
@@ -116,10 +127,8 @@ export default function GlassTeXEditor({ file, sidebar, onError, onOpenFiles }: 
     const listener = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow || event.origin !== ORIGIN || event.data?.channel !== channel) return;
       const message = event.data;
-      if (message.type === 'ready') { setReady(true); if (state.current.loaded) syncDocument(true); }
-      else if (message.type === 'patch') { try { edit(applyTeXPatch(state.current.source, state.current.revision, message.patch as TeXPatch)); } catch (error) { void recover(error); } }
-      else if (message.type === 'active') setInspector({ ...emptyInspector, latex: message.latex ?? '', display: message.display !== false });
-      else if (message.type === 'analysis' && (message.sourceRevision === undefined || message.sourceRevision === state.current.revision)) setInspector(old => ({ ...old, append: message.append ?? '', note: message.note ?? '', javascript: message.javascript ?? '', mathjson: message.mathjson ?? '' }));
+      if (message.type === 'ready') { setReady(true); if (doc.current.loaded) syncDocument(true); }
+      else if (message.type === 'patch') { try { edit(applyTeXPatch(doc.current.source, doc.current.revision, message.patch as TeXPatch)); } catch (error) { void recover(error); } }
       else if (message.type === 'documentInfo') { setInfo({ equations: message.equations ?? 0, rawBlocks: message.rawBlocks ?? 0 }); setNotice((message.warnings ?? []).join(' ')); }
       else if (message.type === 'preview') setPreview(message.enabled === true);
       else if (message.type === 'request') handlers.current(message.action);
@@ -130,10 +139,11 @@ export default function GlassTeXEditor({ file, sidebar, onError, onOpenFiles }: 
     return () => { mounted.current = false; window.removeEventListener('message', listener); };
   }, [file.id]);
   useEffect(() => {
-    if (!loaded || file.revision <= state.current.revision || state.current.recovering) return;
+    if (!loaded || file.revision <= doc.current.revision || doc.current.recovering) return;
     void flushTeX(file.id).then(() => reload()).catch(recover);
   }, [file.revision, loaded]);
   useEffect(() => { if (ready) { receive({ action: 'settings', settings }); receive({ action: 'commands', commands }); } localStorage.setItem('glasstex.settings', JSON.stringify(settings)); }, [settings, ready]);
+  useEffect(() => { if (ready) send('renderActivity', renderActive); }, [ready, renderActive]);
   useEffect(() => { if (ready) receive({ action: 'commands', commands }); localStorage.setItem('glasstex.commands', JSON.stringify(custom)); localStorage.setItem('glasstex.shortcuts', JSON.stringify(shortcuts)); }, [custom, shortcuts, ready]);
   useEffect(() => { list.current?.scrollTo(0, 0); }, [query, category]);
   useEffect(() => { if (loaded && ready && !sourceMode) syncDocument(); }, [sourceMode, loaded, ready]);
@@ -142,7 +152,7 @@ export default function GlassTeXEditor({ file, sidebar, onError, onOpenFiles }: 
     const keyboard = (event: KeyboardEvent) => {
       if (dialog || event.defaultPrevented || !(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
-      const action = key === ',' ? 'settings' : key === 'k' ? 'palette' : event.shiftKey && key === 'l' ? 'source' : event.shiftKey && key === 'p' ? 'preview' : event.shiftKey && key === 'i' ? 'inspector' : event.shiftKey && key === 't' ? 'paragraph' : key === 's' ? event.shiftKey ? 'saveCopy' : 'save' : event.altKey && event.code === 'KeyE' ? 'export' : null;
+      const action = key === ',' ? 'settings' : key === 'k' ? 'palette' : event.shiftKey && key === 'l' ? 'source' : event.shiftKey && key === 'p' ? 'preview' : event.shiftKey && key === 't' ? 'paragraph' : key === 's' ? event.shiftKey ? 'saveCopy' : 'save' : event.altKey && event.code === 'KeyE' ? 'export' : null;
       if (action) { event.preventDefault(); handlers.current(action); }
       else if (sourceMode && key === 'z') { event.preventDefault(); undo(event.shiftKey); }
       else if (sourceMode && event.key === 'Enter') { event.preventDefault(); equation(event.shiftKey); }
@@ -150,29 +160,23 @@ export default function GlassTeXEditor({ file, sidebar, onError, onOpenFiles }: 
     window.addEventListener('keydown', keyboard); return () => window.removeEventListener('keydown', keyboard);
   }, [dialog, sourceMode]);
 
-  const inspectorText = tab === 'JS' ? inspector.javascript || '// Select a supported expression to generate JavaScript.' : tab === 'JSON' ? inspector.mathjson || 'Select a supported expression to inspect its syntax tree.' : tab === 'TSX' ? inspector.latex ? `import { ${inspector.display ? 'BlockMath' : 'InlineMath'} } from 'react-katex';\nimport 'katex/dist/katex.min.css';\n\nexport default function Equation() {\n  return <${inspector.display ? 'BlockMath' : 'InlineMath'} math={${JSON.stringify(inspector.latex)}} />;\n}\n` : '// Select an equation to generate a component.' : inspector.latex || 'Select an equation. Use Full source to edit the complete document.';
   const canEdit = loaded && ready && !recovering;
   function setPreference<K extends keyof TeXSettings>(key: K, value: TeXSettings[K]) { setSettings(old => ({ ...old, [key]: value })); }
   return <div className="document-view glasstex-view">
     <div className="doc-toolbar drag"><div className="doc-title"><span className="file-glyph small tex">TEX</span><strong title={file.originalPath}>{file.name}</strong><span className="tex-save-status" role="status">{recovering ? 'Reloading…' : saving ? 'Saving working copy…' : loaded ? 'GlassTeX' : 'Loading…'}</span></div><div className="doc-actions">
       <button className="quiet-button" onClick={() => setSourceMode(value => !value)}>{sourceMode ? 'Visual editor' : 'Full source'}</button>
-      <button className="quiet-button" onClick={() => setShowInspector(value => !value)} aria-pressed={showInspector}>Inspector</button>
       <button className="quiet-button" disabled={!loaded || recovering} onClick={() => void save(false)}>Save copy</button>
       {file.dirty && file.originalPath && <button className="quiet-button strong" onClick={() => void save(true)}>Save original</button>}
     </div></div>
     <div className="tex-editor-body">
       <div className="tex-canvas">
         <iframe ref={frame} title={`GlassTeX editor — ${file.name}`} src={`${ORIGIN}/index.html`} sandbox="allow-scripts allow-same-origin" className={sourceMode ? 'tex-frame hidden' : 'tex-frame'} />
-        {sourceMode && <textarea ref={sourceEditor} className="tex-source" aria-label="LaTeX source" spellCheck={false} disabled={!loaded || recovering} value={source} onChange={event => edit(event.target.value)} onSelect={event => { selection.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd }; }} />}
+        {sourceMode && <textarea ref={sourceEditor} className="tex-source" aria-label="LaTeX source" spellCheck={false} disabled={!loaded || recovering} value={source} onChange={event => edit(event.target.value)} onSelect={event => { sourceSelection.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd }; }} />}
         {(!loaded || !ready || recovering) && <div className="tex-loading" role="status"><span className="loading-ring" />{recovering ? 'Reloading current source…' : 'Loading GlassTeX…'}</div>}
       </div>
-      {showInspector && <aside className="tex-inspector" aria-label="GlassTeX inspector"><div className="tex-heading"><strong>Inspector</strong><button onClick={() => setShowInspector(false)} aria-label="Hide inspector">×</button></div>
-        <div className="tex-tabs" role="tablist" aria-label="Generated representation">{['LaTeX', 'JS', 'TSX', 'JSON'].map(name => <button key={name} role="tab" aria-selected={tab === name} onClick={() => setTab(name)}>{name}</button>)}</div>
-        <pre className="tex-representation">{inspectorText}</pre><div className="tex-inspector-actions"><button onClick={() => void navigator.clipboard.writeText(inspectorText).catch(error => errorRef.current(errorMessage(error)))}>Copy</button><button onClick={() => setSourceMode(value => !value)}>{sourceMode ? 'Visual' : 'Full source'}</button></div>
-        <div className="tex-assistant"><strong>Math assistant</strong><p>{inspector.note}</p>{inspector.append && <button disabled={!canEdit} onClick={() => receive({ action: 'accept' })}>Accept result ⇥</button>}</div>
-        {!!info.rawBlocks && <p className="tex-note">{info.rawBlocks} source fragments preserved.</p>}{notice && <p className="tex-note" role="status">{notice}</p>}
-      </aside>}
+
     </div>
+    {notice && <p className="tex-note tex-document-notice" role="status">{notice}</p>}
     {sidebar && createPortal(<div className="tex-command-rail" aria-label="GlassTeX commands">
       <div className="tex-heading"><strong>ƒ GlassTeX</strong><span>{info.equations} {info.equations === 1 ? 'equation' : 'equations'}</span><button className="tex-export" disabled={!canEdit || exporting} aria-label="Export GlassTeX to PDF" title="Export to PDF" onClick={() => void exportPDF()}>{exporting ? 'Exporting…' : 'PDF ↗'}</button></div>
       <div className="tex-rail-tools">

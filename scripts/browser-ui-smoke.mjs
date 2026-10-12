@@ -19,6 +19,7 @@ async function main() {
   try {
     await browser.initialize(0); browser.attach(win);
     const handlers = {
+      windowActivity:()=>false,
       status:()=>({connected:false,account:null,models:[],voices:[],voiceAvailable:false,settings:defaultSettings,executable:'',platform:process.platform,darkMode:false}),
       workspace:()=>({files:[],activeId:null,artifacts:[],thinking:{threadId:null,busy:false,delegating:false,compacting:false,queued:0,tokens:0,contextWindow:null,contextVersion:0},annotations:{overlays:[],highlights:[],pointer:null},quiz:{banks:[],quiz:null}}),
       browserImportCookies:id=>browser.importCookies(id),browserState:()=>browser.state(),browserOpen:url=>browser.open(url),browserSelect:id=>browser.select(id),browserClose:id=>browser.closeTab(id),browserNavigate:(id,url)=>browser.navigate(id,url),browserControl:(id,action)=>browser.control(id,action),browserBounds:bounds=>browser.setBounds(bounds),browserPairing:()=>browser.pairing(),browserRotatePairing:()=>browser.rotatePairing(),browserRevoke:id=>browser.bridge.revoke(id),

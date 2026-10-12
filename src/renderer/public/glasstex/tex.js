@@ -41,26 +41,30 @@ function algorithmLines(source, start, end) {
   }
   const trivia=s=>!s.replace(/%[^\n]*(?:\n|$)/g,'').trim();
   if(!markers.length||!trivia(source.slice(start,markers[0].start)))return null;
+  // Each open control structure, with the index of its first row. Every row of
+  // one structure (While … EndWhile, If … Else … EndIf) shares that group.
   const stack=[],rows=[];let number=0;
   for(let i=0;i<markers.length;i++) {
     const m=markers[i],limit=markers[i+1]?.start??end;
-    let contentStart=m.after,contentEnd=limit,prefix='',suffix='',indent=stack.length;
+    let contentStart=m.after,contentEnd=limit,prefix='',suffix='',indent=stack.length,group=null;
     while(/\s/.test(source[contentStart]||'')&&contentStart<limit)contentStart++;
-    if(endings[m.name]){const [label,expected]=endings[m.name];if(stack.pop()!==expected)return null;prefix=label;indent=stack.length;}
-    if(m.name==='Else'||m.name==='ElsIf'){if(stack.at(-1)!=='If')return null;indent--;prefix=m.name==='Else'?'else':'else if';suffix=m.name==='ElsIf'?'then':'';}
-    if(controls[m.name]){[prefix,suffix]=controls[m.name];stack.push(controls[m.name][2]);}
+    if(endings[m.name]){const [label,expected]=endings[m.name],open=stack.pop();if(open?.name!==expected)return null;prefix=label;indent=stack.length;group=open.group;}
+    if(m.name==='Else'||m.name==='ElsIf'){if(stack.at(-1)?.name!=='If')return null;indent--;prefix=m.name==='Else'?'else':'else if';suffix=m.name==='ElsIf'?'then':'';group=stack.at(-1).group;}
+    if(controls[m.name]){[prefix,suffix]=controls[m.name];group=rows.length;stack.push({name:controls[m.name][2],group});}
     const hasArgument=['While','If','For','ForAll','ElsIf','Until'].includes(m.name);
     if(hasArgument){const arg=balanced(source,contentStart);if(!arg||arg.after>limit||!trivia(source.slice(arg.after,limit)))return null;contentStart=arg.start;contentEnd=arg.end;}
     else if(m.name!=='State'&&m.name!=='Statex'&&m.name!=='Require'&&m.name!=='Ensure'){
       if(!trivia(source.slice(contentStart,limit)))return null;contentEnd=contentStart;
     } else {
       contentEnd=limit-source.slice(contentStart,limit).match(/\s*$/)[0].length;
+      // An empty statement is edited right after its command, not at the next line's start.
+      if(contentStart===contentEnd)contentStart=contentEnd=m.after;
       if(m.name==='Require')prefix='Require:';
       if(m.name==='Ensure')prefix='Ensure:';
     }
     const numbered=!['Statex','Require','Ensure'].includes(m.name);
     if(numbered)number++;
-    rows.push({...m,end:limit,contentStart,contentEnd,prefix,suffix,indent,editableContent:hasArgument||['State','Statex','Require','Ensure'].includes(m.name),number:numbered?number:null});
+    rows.push({...m,end:limit,contentStart,contentEnd,prefix,suffix,indent,group,editableContent:hasArgument||['State','Statex','Require','Ensure'].includes(m.name),number:numbered?number:null});
   }
   return stack.length?null:rows;
 }
@@ -297,6 +301,9 @@ function scanDocument(source) {
         continue;
       }
       if (c === '\\' && !escaped(source, cursor)) {
+        // Text escapes are prose; their {} must not be split off as a group.
+        const textEscape = /^\\(?:textbackslash|textasciitilde|textasciicircum)\{\}/.exec(source.slice(cursor, limit));
+        if (textEscape) { lineStart = false; cursor += textEscape[0].length; continue; }
         const layoutCommand = /^\\([A-Za-z]+)[ \t]*/.exec(source.slice(cursor));
         if (layoutCommand && (layoutCommand[1] === 'noindent' || noIndent.has(layoutCommand[1]))) {
           flush(cursor); const after = skipAfterCommand(cursor + layoutCommand[0].length);
@@ -387,7 +394,9 @@ function scanDocument(source) {
                   if(rows[0].start>inner)push('metadata',inner,rows[0].start);
                   const frequency=/^\d+$/.test(options.trim())?Number(options):0;
                   for(const row of rows){
-                    push('blockStart',row.start,row.contentStart,{environment:'algorithm-line',indent:row.indent,lineNumber:frequency&&row.number&&row.number%frequency===0?row.number:null,prefix:row.prefix,suffix:row.suffix,editableContent:row.editableContent});
+                    // command and group let editing remove a statement without
+                    // unbalancing the control structure it sits in.
+                    push('blockStart',row.start,row.contentStart,{environment:'algorithm-line',command:row.name,group:row.group===null?null:`${cursor}:${row.group}`,indent:row.indent,lineNumber:frequency&&row.number&&row.number%frequency===0?row.number:null,prefix:row.prefix,suffix:row.suffix,editableContent:row.editableContent});
                     scanRange(row.contentStart,row.contentEnd,false,depth+1);
                     push('blockEnd',row.contentEnd,row.end);
                   }

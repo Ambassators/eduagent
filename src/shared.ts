@@ -10,6 +10,8 @@ export interface Settings {
   reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh';
   transparency: 'mica' | 'acrylic' | 'opaque';
   theme: 'system' | 'light' | 'dark';
+  /** Use a prerecorded microphone orb loop instead of live gradient animation. */
+  lowPowerMode: boolean;
   demoPlacement: 'side' | 'popup';
   /** Opt-in: the quiz coach writes a follow-up after every answer. */
   quizFollowUps: boolean;
@@ -21,14 +23,29 @@ export interface Settings {
   /** Opt-in: answers to questions about the open PDF are highlighted, and explained with overlays or embeds, without the user asking. */
   proactiveExplain: boolean;
   priority: boolean;
+  /** Seconds of quiet before the live voice connection is closed to save usage; it reconnects when you speak. 0 keeps it open. */
+  standbyAfterSeconds: number;
+  /** How speech that woke standby reaches the reconnected session: replayed at normal speed, replayed faster until caught up, or sent in one burst (experimental). */
+  voiceCatchUp: 'realtime' | 'fast' | 'burst';
+  /** Spoken acknowledgement ("let me check") when voice hands a request to the bridge. */
+  voiceAckFiller: boolean;
+  /** Milliseconds of detected speech needed to wake standby, so coughs and short noises do not reconnect. */
+  standbyWakeMs: number;
+  /** Return to standby if a wake hears no words within this many seconds. 0 turns it off. */
+  standbyFalseWakeSeconds: number;
 }
 export const defaultSettings: Settings = {
   voice: '', model: 'gpt-6.1-sol', codexPath: '', inputDevice: '', reasoningEffort: 'low',
-  transparency: 'acrylic', theme: 'system', demoPlacement: 'side', quizFollowUps: false, autoCompact: true, compactAtTokens: 48000,
+  transparency: 'acrylic', theme: 'system', lowPowerMode: false, demoPlacement: 'side', quizFollowUps: false, autoCompact: true, compactAtTokens: 48000,
   agentTools: false,
   bridgeResearch: false,
   proactiveExplain: false,
   priority: true,
+  standbyAfterSeconds: 60,
+  voiceCatchUp: 'realtime',
+  voiceAckFiller: true,
+  standbyWakeMs: 300,
+  standbyFalseWakeSeconds: 10,
   prompt: 'You are a thoughtful voice companion in a document workspace. Speak naturally. You already receive the currently open file as quiet context. Answer simple questions directly. For deep reasoning, web search, document edits, or screen demonstrations, delegate to the backend and ask it to call think with an optional message. The Think thread already has the full conversation transcript and current file context; do not repeat them. Keep talking while it works. Only describe completed actions after their tools succeed.'
 };
 export interface ModelOption { model: string; displayName: string; isDefault: boolean; efforts?: string[] }
@@ -70,6 +87,7 @@ export interface WorkspaceState { files: DocumentInfo[]; activeId: string | null
 export interface DebugLog { id: string; time: number; agent: 'voice' | 'bridge' | 'think' | 'app'; kind: 'tool' | 'route' | 'event' | 'error'; label: string; detail?: string; model?: string; status?: 'running' | 'completed' | 'failed'; ms?: number }
 export interface ToolActivity { id: string; name: string; status: 'running' | 'completed' | 'failed'; detail: string; time: number }
 export interface DesktopAPI {
+  onWindowActivity(handler: (active: boolean) => void): () => void;
   browserState(): Promise<BrowserState>;
   browserOpen(url?: string): Promise<BrowserState>;
   browserSelect(id: string): Promise<BrowserState>;
@@ -87,8 +105,13 @@ export interface DesktopAPI {
   cancelLogin(): Promise<void>;
   saveSettings(settings: Settings): Promise<Settings>;
   microphoneAccess(): Promise<boolean>;
-  startVoice(sdp: string): Promise<{threadId: string; sdp: string}>;
+  /** resume: reconnecting after standby on the same bridge thread, so its context is still there. */
+  startVoice(sdp: string, resume?: boolean): Promise<{threadId: string; sdp: string}>;
   stopVoice(): Promise<void>;
+  /** Experimental: base64 16-bit mono PCM sent straight to the live session's input. */
+  appendVoiceAudio(data: string, sampleRate: number): Promise<void>;
+  /** Adds a line to the debug log panel. */
+  voiceLog(label: string, detail?: string): Promise<void>;
   interrupt(): Promise<void>;
   sendText(text: string): Promise<void>;
   newConversation(): Promise<void>;

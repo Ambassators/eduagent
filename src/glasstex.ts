@@ -36,6 +36,32 @@ export function cleanTeXSettings(value: unknown): TeXSettings {
   return result;
 }
 export const texCategoryOrder = ['Document blocks', 'Math structures', 'Essentials', 'Text & layout', 'Functions', 'Greek', 'Operators', 'Relations', 'Sets & logic', 'Arrows', 'Large operators', 'Accents & styling', 'Spacing', 'Symbols', 'References & source'];
+/** Undo and redo as whole-source snapshots, bounded by count and, for large documents, by memory. */
+export class TeXHistory {
+  private past: string[] = [];
+  private future: string[] = [];
+  private readonly limit: number;
+  private readonly maxBytes: number;
+  constructor(limit = 200, maxBytes = 32 * 1024 * 1024) { this.limit = limit; this.maxBytes = maxBytes; }
+  /** Remember the source as it was before an edit. A new edit discards whatever could be redone. */
+  record(previous: string) {
+    this.past.push(previous);
+    this.future = [];
+    let bytes = this.past.reduce((total, text) => total + text.length * 2, 0);
+    while (this.past.length > this.limit || (this.past.length > 1 && bytes > this.maxBytes)) bytes -= this.past.shift()!.length * 2;
+  }
+  /** The source to go back to, or null; `current` becomes redoable. */
+  undo(current: string): string | null { return TeXHistory.move(this.past, this.future, current); }
+  /** The source to go forward to, or null; `current` becomes undoable. */
+  redo(current: string): string | null { return TeXHistory.move(this.future, this.past, current); }
+  clear() { this.past = []; this.future = []; }
+  private static move(from: string[], to: string[], current: string) {
+    const next = from.pop();
+    if (next === undefined) return null;
+    to.push(current);
+    return next;
+  }
+}
 export function applyTeXPatch(source: string, revision: number, patch: TeXPatch): string {
   if (patch.revision !== revision) throw new Error('The document changed while this edit was being made.');
   const { start, end } = patch;

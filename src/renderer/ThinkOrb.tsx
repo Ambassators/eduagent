@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ToolActivity } from '../shared';
 import Icon from './Icon';
 import { Orb } from './Orb';
+import { useRenderActive } from './render-activity';
 
 export interface ThinkJob { id: string; message: string; startedAt: number }
 type Stage = 'hidden' | 'working' | 'done' | 'leaving';
@@ -13,6 +14,7 @@ export function ThinkOrb({ busy, delegating, compacting, queued, job, activities
 }) {
   // Voice requests start in the delegation bridge, which may run quiz/PDF tools itself without ever queuing Think.
   const working = busy || delegating || compacting;
+  const renderActive = useRenderActive();
   const [stage, setStage] = useState<Stage>(working ? 'working' : 'hidden');
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -29,7 +31,7 @@ export function ThinkOrb({ busy, delegating, compacting, queued, job, activities
     if (stage === 'leaving') { const timer = setTimeout(() => setStage(old => old === 'leaving' ? 'hidden' : old), 380); return () => clearTimeout(timer); }
   }, [stage, open]);
   useEffect(() => { if (stage === 'hidden' || stage === 'leaving') setOpen(false); }, [stage]);
-  useEffect(() => { if (!open || !working) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [open, working]);
+  useEffect(() => { if (!open || !working || !renderActive) return; setNow(Date.now()); const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [open, working, renderActive]);
   useEffect(() => {
     if (!open) return;
     const away = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
@@ -48,7 +50,7 @@ export function ThinkOrb({ busy, delegating, compacting, queued, job, activities
   const label = stage === 'done' ? 'Think finished' : `Think is working: ${current}. Show details`;
   return <div className="think-orb-root" ref={root}>
     <div className={`think-orb-anchor ${stage}`}><button type="button" className="think-orb" data-tone={stage === 'done' ? 'speaking' : 'on'} aria-label={label} title={current} aria-expanded={open} aria-haspopup="dialog" onClick={() => { setNow(Date.now()); setOpen(value => !value); }}>
-      <Orb tone="on" />
+      <Orb tone={working ? 'on' : 'idle'} />
       {stage === 'done' ? <Icon name="check" size={14} /> : <span className="orb-spinner" />}
     </button></div>
     {open && <div className="think-orb-card" role="dialog" aria-label="What Think is doing">
