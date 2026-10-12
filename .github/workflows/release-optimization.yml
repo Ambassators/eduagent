@@ -1,0 +1,47 @@
+name: Publish optimization prerelease
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/release-optimization.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: release-optimization-df4cbf3
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish verified optimization packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          repo=Ambassators/eduagent
+          run=38193333741
+          sha=df4cbf385796e977e79ea0efa45bd0903c9fa7f4
+          tag=Alpha-optimization-df4cbf3
+          test "$(gh api repos/$repo/actions/runs/$run --jq .head_sha)" = "$sha"
+          gh run watch "$run" --repo "$repo" --exit-status
+          gh run download "$run" --repo "$repo" --dir packages
+          test -f packages/Codex-Voice-mac-arm64/Codex-Voice-2.0.0-mac-arm64.dmg
+          test -f packages/Codex-Voice-mac-x64/Codex-Voice-2.0.0-mac-x64.dmg
+          test -f packages/Codex-Voice-Windows-x64/Codex-Voice-2.0.0-win-x64.exe
+          test -f packages/Codex-Voice-Windows-x64/Codex-Voice-2.0.0-win-x64.zip
+          cat > notes.md <<'NOTES'
+          Optimization update built from df4cbf385796e977e79ea0efa45bd0903c9fa7f4.
+
+          - Low power mode, smoother orb playback, and activity-aware rendering.
+          - GlassTeX editing, selection, resizing, and voice improvements.
+          - Windows x64 installer/ZIP and macOS Apple Silicon/Intel DMG/ZIP packages.
+
+          Validation: production build and all 31 unit tests passed locally. All packages come from the successful desktop build for this exact commit.
+
+          Known issue: the macOS GlassTeX editing suite passed 40/41 cases; Enter inside a display equation did not create the expected second equation. Unsigned, experimental prerelease.
+          NOTES
+          if ! gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$repo" --target "$sha" --title "Optimization update (df4cbf3)" --draft --prerelease --notes-file notes.md
+          fi
+          gh release upload "$tag" --repo "$repo" packages/Codex-Voice-mac-arm64/*.dmg packages/Codex-Voice-mac-arm64/*.zip packages/Codex-Voice-mac-x64/*.dmg packages/Codex-Voice-mac-x64/*.zip packages/Codex-Voice-Windows-x64/*.exe packages/Codex-Voice-Windows-x64/*.zip --clobber
+          gh release edit "$tag" --repo "$repo" --draft=false --prerelease --notes-file notes.md
