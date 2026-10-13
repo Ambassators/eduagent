@@ -348,10 +348,12 @@ function registerIPC(): void {
     if (turnId || startingTurn || voiceActive || voiceStarting) throw new Error('End the conversation before changing settings.');
     const next = cleanSettings(value);
     const restart = next.codexPath !== settings.codexPath;
+    const resetQuizModel = next.quizModel !== settings.quizModel;
     const resetVoiceTools = next.agentTools !== settings.agentTools || next.bridgeResearch !== settings.bridgeResearch || next.proactiveExplain !== settings.proactiveExplain;
     if (restart) { await thinker.reset(); quizzes.disconnect(); threadId = null; }
     await writeFile(path.join(app.getPath('userData'), 'settings.json'), JSON.stringify(next, null, 2), { mode: 0o600 });
     settings = next;
+    if (!restart && resetQuizModel) quizzes.disconnect();
     if(!restart&&resetVoiceTools){await thinker.resetVoice();threadId=null;}
     if (restart) { codex.close(); startPromise = null; }
     else if (threadId) await codex.request('thread/settings/update',{threadId,model:next.model||undefined,serviceTier:next.priority?'priority':'default'}).catch(()=>{});

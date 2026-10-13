@@ -235,7 +235,7 @@ export class ThinkEngine {
     if(this.pending.length>=8)throw new Error('Think already has eight queued requests. Let it finish or cancel pending work.');
     trace('requestThink',JSON.stringify(message.slice(0,80)));
     const id=randomUUID();
-    const generator=from==='quiz'||(from==='bridge'&&quizRequest)||isQuizGenerationRequest(message.trim()||latest?.text||'')?'quiz':'answer';
+    const generator=from==='quiz'||(from==='bridge'&&latest&&isQuizGenerationRequest(latest.text))||isQuizGenerationRequest(message.trim()||latest?.text||'')?'quiz':'answer';
     debugLog({agent:from==='bridge'?'bridge':'app',kind:'route',label:from==='bridge'?'Bridge → Think: queued':from==='quiz'?'Voice quiz → Think: queued':'Typed → Think: queued',detail:message.trim()||'(no message: use the latest request)',model:from==='bridge'?this.modelOf('voice'):undefined});this.pending.push({id,generator,message:message.trim()||'Do the reasoning or action most recently requested in the shared conversation, using the currently open file. If the latest utterance is ambiguous, explain the ambiguity instead of guessing a destructive edit.'});
     if(quizRequest){this.quizRequests.set(quizRequest.id,id);this.lastQuizRequest={jobId:id,fileId:this.files.activeId};}
     this.state.queued=this.pending.length;this.changed();void this.drain();return id;

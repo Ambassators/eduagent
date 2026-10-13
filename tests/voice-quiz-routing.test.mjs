@@ -29,6 +29,11 @@ for (const answerModel of ['answer-model','']) test(`queued quiz and answer jobs
     assert.equal(turns[1].model,answerModel||'service-default');assert.equal(turns[1].effort,'low');
     assert.match(engine.modelOf('think'),new RegExp(`${answerModel||'service-default'}.*low`));
     complete();
+    engine.syncTranscript([entry('add','Please add three more questions')]);
+    await engine.requestThink('Author more exercises from the source material','bridge');
+    await waitFor(3);
+    assert.equal(turns[2].model,'quiz-model');assert.equal(turns[2].effort,'high');
+    complete();
     assert.equal(logs.some(event=>event.method==='think/error'),false);
   } finally {engine.shutdown();}
 });
