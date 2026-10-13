@@ -1,0 +1,237 @@
+// Exercise floating results with the production renderer, preload, and quiz engine.
+import { app, BrowserWindow, ipcMain, protocol } from 'electron';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { QuizEngine } from '../dist/main/main/quiz.js';
+import { DocumentStore } from '../dist/main/main/documents.js';
+import { QuizFiles } from '../dist/main/main/quiz-files.js';
+import { ThinkEngine } from '../dist/main/main/think.js';
+import { parseSourceURL, verifySource, isLongMarkdown } from '../dist/main/main/markdown-results.js';
+import { defaultSettings } from '../dist/main/shared.js';
+protocol.registerSchemesAsPrivileged([{scheme:'codex-presentation',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
+app.on('window-all-closed',()=>{});
+async function main() {
+const profile = await mkdtemp(path.join(os.tmpdir(),'codex-floating-ui-'));
+app.setPath('userData',profile);
+await app.whenReady();
+const win = new BrowserWindow({width:1460,height:920,show:false,webPreferences:{preload:path.resolve('dist/main/main/preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,offscreen:true,backgroundThrottling:false}});
+let quizFiles;
+const emit = event => {if(event.method==='quiz/state')quizFiles?.changed();win.webContents.send('voice:event',event);};
+const files=new DocumentStore(path.join(profile,'files'),()=>emit({method:'workspace/changed',params:{workspace:state()}}));
+await files.initialize();
+const quiz = new QuizEngine({running:false},()=>defaultSettings,profile,emit,()=>files.list().filter(file=>file.kind==='pdf').map(file=>({fileId:file.id,title:file.name,pages:files.content(file.id).pages??[]})));
+const artifacts = [];
+const errors = [];
+quizFiles=new QuizFiles(quiz,files,error=>errors.push(String(error)));
+const openedQuizSources=[];
+let failQuizSource=false;
+const displayed=[];
+const thinker=new ThinkEngine({},files,()=>defaultSettings,profile,emit,async()=>{},presentation=>displayed.push(presentation),async()=>{});
+thinker.artifacts=artifacts;thinker.state.threadId='test';
+const show=async args=>thinker.executeTool({threadId:'test',tool:'show_text',arguments:args,callId:crypto.randomUUID()});
+win.webContents.on('console-message',(_event,level,message)=>{if(level===3)errors.push(message);});
+const state = () => ({files:files.list(),activeId:files.activeId,artifacts,thinking:{threadId:null,busy:false,delegating:false,compacting:false,queued:0,tokens:0,contextWindow:null,contextVersion:0},annotations:{overlays:[],highlights:[],pointer:null},quiz:quiz.state});
+const handlers = {
+  openQuizSource:source=>{if(failQuizSource)throw new Error('Source unavailable');openedQuizSources.push(source);},
+  windowActivity:()=>false,
+  status:()=>({connected:true,account:null,models:[],voices:[],voiceAvailable:false,settings:defaultSettings,executable:'',platform:process.platform,darkMode:false}),
+  workspace:state,browserState:()=>null,syncTranscript:()=>{},
+  answerQuiz:async input=>{const result=quiz.answer(input);await quizFiles.flush();return result;},setQuizAdaptive:value=>quiz.setAdaptive(value),setQuizMaxQuestions:value=>quiz.setMaxQuestions(value),setQuizMode:value=>quiz.setMode(value),closeQuiz:()=>quiz.closeQuiz(),
+  document:id=>files.content(id),documentBytes:id=>files.bytes(id),page:(id,page)=>files.setPage(id,page),
+  selectFile:async id=>{await quizFiles.select(id);return state();},
+  closeFile:async id=>{await quizFiles.flush();if(quizFiles.isCurrent(id))quiz.closeQuiz();await files.close(id);return state();},
+  openURL:async value=>{const source=verifySource(files,parseSourceURL(value));await files.select(source.fileId);emit({method:'document/source',params:{source}});},
+  present:(id,placement)=>{const presentation=artifacts.find(item=>item.id===id);presentation.placement=placement;emit({method:'workspace/presentation',params:{presentation}});}
+};
+for(const [name,fn] of Object.entries(handlers))ipcMain.handle(`voice:${name}`,(_event,...args)=>fn(...args));
+const js = async source => {try{return await win.webContents.executeJavaScript(source);}catch(error){console.error('Failed UI action:',source);throw error;}};
+const wait = async predicate => {for(let i=0;i<50;i++){if(await js(predicate))return;await new Promise(resolve=>setTimeout(resolve,100));}throw new Error(`UI timed out: ${predicate}`);};
+const rect = selector => js(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};})()`);
+const clickSwitch = async selector => {
+  assert.equal(await js(`getComputedStyle(document.querySelector(${JSON.stringify(selector)}).closest('label')).getPropertyValue('-webkit-app-region')`),'no-drag');
+  const bounds = await rect(`${selector} + .qz-switch-track`);
+  const x = Math.round(bounds.x + bounds.width / 2), y = Math.round(bounds.y + bounds.height / 2);
+  win.webContents.sendInputEvent({type:'mouseDown',x,y,button:'left',clickCount:1});
+  win.webContents.sendInputEvent({type:'mouseUp',x,y,button:'left',clickCount:1});
+};
+
+try {
+  await win.webContents.session.protocol.handle('codex-presentation',()=>new Response('<html><body><h1>Interactive practice</h1><button>Try it</button></body></html>',{headers:{'Content-Type':'text/html'}}));
+  await win.loadFile(path.resolve('dist/renderer/index.html'));
+  await wait(`!!document.querySelector('.account.signed-out')`);
+  await wait(`document.documentElement.dataset.renderActive==='false'`);
+  assert.deepEqual(await js(`Array.from(document.querySelectorAll('.rail'),rail=>({opacity:getComputedStyle(rail).opacity,animation:getComputedStyle(rail).animationName}))`),[{opacity:'1',animation:'none'},{opacity:'1',animation:'none'}]);
+  win.webContents.send('voice:windowActivity',true);
+  await wait(`document.documentElement.dataset.renderActive==='true'`);
+  await new Promise(resolve=>setTimeout(resolve,900));
+  const before=await rect('.document-column');
+  const quizGuide=await files.create('Arithmetic guide','pdf','Seven groups of eight total 56.');
+  const bank=quiz.createBank({title:'Multiplication practice',questions:[{kind:'choice',prompt:'What is 7 × 8?',topic:'Multiplication',difficulty:1,choices:['54','56','64'],correctIndex:1,choiceExplanations:['54 is two too low.','Seven groups of eight total 56.','64 is eight groups of eight.'],explanation:'7 × 8 = 56.',sources:[{fileId:quizGuide.id,page:1,label:'Multiplication'}]}]});
+  quiz.startQuiz({bankId:bank.bankId,adaptive:false});await quizFiles.flush();
+  const quizFile=files.list().find(file=>file.kind==='quiz');assert.ok(quizFile);
+  assert.equal(files.activeId,quizFile.id);assert.ok(!files.context().includes('correctIndex'));
+  await wait(`!!document.querySelector('.quiz-document .qz-option[role=radio]')`);
+  const quizBounds=await rect('.qz-scroll');
+  const showAttachments=async()=>{await js(`document.querySelector('[aria-controls="quiz-attachments"]').click()`);await wait(`document.querySelector('#quiz-attachments')?.matches(':popover-open')`);};
+  await showAttachments();
+  assert.deepEqual(await rect('.qz-scroll'),quizBounds,'Attachment popup must not move the quiz');
+  assert.match(await js(`document.querySelector('#quiz-attachments').textContent`),/Arithmetic guide.pdf/);
+  assert.match(await js(`document.querySelector('#quiz-attachments').textContent`),/Entire PDF/);
+  assert.doesNotMatch(await js(`document.querySelector('#quiz-attachments').textContent`),/Cited pages/);
+  assert.equal(await js(`document.activeElement.getAttribute('aria-label')`),'Close attachments');
+  await js(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'s',bubbles:true}))`);
+  assert.equal(await js(`document.querySelector('.qz-option[aria-checked="true"]')===null`),true,'Popup keys must not answer the underlying quiz');
+  win.webContents.invalidate();await new Promise(resolve=>setTimeout(resolve,250));
+  await writeFile(path.join(os.tmpdir(),'codex-quiz-attachments.png'),(await win.webContents.capturePage()).toPNG());
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});
+  await wait(`!document.querySelector('#quiz-attachments')?.matches(':popover-open')`);
+  assert.equal(await js(`document.activeElement.getAttribute('aria-controls')`),'quiz-attachments');
+  await showAttachments();
+  failQuizSource=true;await js(`document.querySelector('.qz-attachment-file').click()`);
+  await wait(`!!document.querySelector('#quiz-attachments [role="alert"]')`);
+  assert.equal(await js(`document.querySelector('#quiz-attachments').matches(':popover-open')`),true);
+  failQuizSource=false;await js(`document.querySelector('.qz-attachment-file').click()`);
+  await wait(`!document.querySelector('#quiz-attachments')?.matches(':popover-open')`);
+  assert.equal(openedQuizSources[0].fileId,quizGuide.id);assert.equal(openedQuizSources[0].page,1);
+  await showAttachments();
+  win.setSize(800,600);await wait(`innerWidth===800`);
+  await wait(`(()=>{const r=document.querySelector('#quiz-attachments').getBoundingClientRect();return r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;})()`);
+  const popup=await rect('#quiz-attachments');assert.ok(popup.x>=0&&popup.y>=0&&popup.x+popup.width<=800&&popup.y+popup.height<=600,JSON.stringify(popup));
+  win.webContents.sendInputEvent({type:'mouseDown',x:5,y:5,button:'left',clickCount:1});win.webContents.sendInputEvent({type:'mouseUp',x:5,y:5,button:'left',clickCount:1});
+  await wait(`!document.querySelector('#quiz-attachments')?.matches(':popover-open')`);
+  win.setSize(1460,920);await wait(`innerWidth===1460`);
+  await showAttachments();await js(`document.querySelector('[aria-label="Close attachments"]').click()`);await wait(`!document.querySelector('#quiz-attachments')?.matches(':popover-open')`);
+  assert.deepEqual(await rect('.qz-scroll'),quizBounds);
+  await js(`document.querySelector('.qz-count').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);
+  await wait(`!!document.querySelector('[aria-label="Maximum questions"]')`);
+  await js(`(()=>{const input=document.querySelector('[aria-label="Maximum questions"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'50');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await js(`document.querySelector('[aria-label="Save maximum questions"]').click()`);
+  await wait(`document.querySelector('.qz-count')?.textContent.includes('of 50')`);
+  assert.equal(quiz.state.quiz.maxQuestions,50);assert.equal(quiz.state.quiz.total,1);
+  assert.equal(await js(`document.querySelectorAll('.qz-progress > span').length`),50);
+  emit({method:'quiz/state',params:{state:{...quiz.state,quiz:{...quiz.state.quiz,total:3}}}});
+  await wait(`document.querySelectorAll('.qz-progress .is-ready').length===2`);
+  assert.notEqual(await js(`getComputedStyle(document.querySelector('.qz-progress .is-ready')).backgroundColor`),await js(`getComputedStyle(document.querySelector('.qz-progress .is-unready')).backgroundColor`));
+  emit({method:'quiz/state',params:{state:quiz.state}});
+  await clickSwitch('[aria-label="AI question selection"]');
+  await wait(`document.querySelector('[aria-label="AI question selection"]').checked===false`);
+  assert.equal(quiz.state.quiz.adaptiveMode,'programmatic');
+  await quizFiles.flush();assert.equal(JSON.parse(files.content(quizFile.id).text).adaptiveMode,'programmatic');
+  await clickSwitch('[aria-label="AI question selection"]');
+  await wait(`document.querySelector('[aria-label="AI question selection"]').checked===true`);
+  assert.equal(quiz.state.quiz.adaptiveMode,'ai');
+  await clickSwitch('.qz-switch input:not([aria-label])');
+  await wait(`document.querySelector('.qz-switch input:not([aria-label])').checked===true`);
+  assert.equal(quiz.state.quiz.adaptive,true);
+  await clickSwitch('.qz-switch input:not([aria-label])');
+  await wait(`document.querySelector('.qz-switch input:not([aria-label])').checked===false`);
+  assert.equal(quiz.state.quiz.adaptive,false);
+  const demo={id:'floating-demo',title:'Interactive practice',kind:'demo',placement:'side',content:'',time:Date.now()};
+  artifacts.push(demo);emit({method:'workspace/presentation',params:{presentation:demo}});
+  await wait(`document.querySelectorAll('.floating-card').length===1 && !!document.querySelector('.quiz-document')`);
+  assert.deepEqual(await rect('.document-column'),before,'Opening results must preserve document space');
+  assert.equal(await js(`!!document.querySelector('.stage-presentation')`),false);
+  assert.deepEqual(await js(`Array.from(document.querySelectorAll('.qz-option[role=radio]'),option=>option.getAttribute('aria-keyshortcuts'))`),['A','S','D']);
+  await js(`document.querySelector('.qz-prompt').focus();window.dispatchEvent(new KeyboardEvent('keydown',{key:'d',bubbles:true}))`);
+  assert.equal(await js(`document.querySelectorAll('.qz-option[role=radio]')[2].getAttribute('aria-checked')`),'true');
+  await js(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'b',bubbles:true}))`);
+  assert.equal(await js(`document.querySelectorAll('.qz-option[role=radio]')[2].getAttribute('aria-checked')`),'true');
+  await js(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'s',bubbles:true}))`);
+  await wait(`document.querySelectorAll('.qz-option[role=radio]')[1].getAttribute('aria-checked')==='true'`);
+  await wait(`!document.querySelector('.qz-action-row .is-primary').disabled`);
+  await js(`document.querySelector('.qz-action-row .is-primary').click()`);
+  await wait(`document.querySelectorAll('.qz-options.is-review .qz-option').length===3`);
+  assert.equal(quiz.state.quiz.stats.accuracy,100);
+  const generationState=()=>({...quiz.state,quiz:{...quiz.state.quiz,adaptive:true,adaptiveMode:'ai',coachBusy:true}});
+  emit({method:'quiz/state',params:{state:generationState()}});
+  await wait(`!!document.querySelector('.qz-generation')`);
+  assert.equal(await js(`document.querySelector('.qz-action-row .is-primary').disabled`),false,'Generation must not block Next');
+  assert.equal(await js(`document.querySelector('.qz-generation').getAnimations({subtree:true}).length`),0);
+  const hoverTarget=await rect('.qz-generation');
+  win.webContents.sendInputEvent({type:'mouseMove',x:Math.round(hoverTarget.x+5),y:Math.round(hoverTarget.y+5)});
+  await js(`document.querySelector('.qz-generation').dispatchEvent(new MouseEvent('mouseover',{bubbles:true}))`);
+  await wait(`getComputedStyle(document.querySelector('.qz-generation-details')).display==='block'`);
+  const indicator=await rect('.qz-generation'),pane=await rect('.qz-shell');
+  assert.ok(indicator.x-pane.x<24&&pane.y+pane.height-indicator.y<32);
+  win.webContents.invalidate();await new Promise(resolve=>setTimeout(resolve,250));
+  await js(`document.querySelector('.floating-presentation').style.visibility='hidden'`);
+  await writeFile(path.join(os.tmpdir(),'codex-quiz-target.png'),(await win.webContents.capturePage()).toPNG());
+  await js(`document.querySelector('.floating-presentation').style.visibility=''`);
+  emit({method:'quiz/state',params:{state:quiz.state}});
+  await wait(`!document.querySelector('.qz-generation')`);
+  await quizFiles.flush();
+  const savedPath=path.join(profile,'practice.quiz');await files.save(quizFile.id,savedPath,false);
+  const persisted=files.content(quizFile.id).text;quiz.reset();quiz.restoreFile(persisted);assert.equal(quiz.state.quiz.stats.accuracy,100);
+  await quizFiles.flush();
+  await wait(`document.querySelector('.qz-action-row .is-primary')?.textContent==='See results'`);
+  await js(`document.querySelector('.qz-action-row .is-primary').click()`);
+  await wait(`!!document.querySelector('.qz-summary')`);
+  emit({method:'quiz/state',params:{state:generationState()}});
+  await wait(`!!document.querySelector('.qz-generation')`);
+  assert.equal(await js(`document.querySelector('.qz-summary .qz-button').disabled`),false);
+  emit({method:'quiz/state',params:{state:quiz.state}});
+  await wait(`!document.querySelector('.qz-generation')`);
+  const old=await rect('.floating-presentation');
+  await js(`(()=>{const h=document.querySelector('.floating-presentation .floating-card-heading');h.focus();h.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));})()`);
+  assert.equal((await rect('.floating-presentation')).x,old.x+10);
+  // Use native input to exercise pointer capture and drag bounds.
+  const grip=await rect('.floating-presentation .floating-card-heading');
+  const x=Math.round(grip.x+20),y=Math.round(grip.y+20);
+  win.webContents.sendInputEvent({type:'mouseDown',x,y,button:'left',clickCount:1});
+  win.webContents.sendInputEvent({type:'mouseMove',x:x+30,y:y+20,button:'left'});
+  win.webContents.sendInputEvent({type:'mouseUp',x:x+30,y:y+20,button:'left',clickCount:1});
+  await wait(`Math.abs(document.querySelector('.floating-presentation').getBoundingClientRect().x-${old.x+40})<2`);
+  await js(`document.querySelector('.floating-presentation').style.width='520px'`);
+  await wait(`document.querySelector('.floating-presentation').getBoundingClientRect().width===520`);
+  win.webContents.invalidate();
+  await new Promise(resolve=>setTimeout(resolve,500));
+  await writeFile(path.join(os.tmpdir(),'codex-floating-cards.png'),(await win.webContents.capturePage()).toPNG());
+  await js(`document.querySelector('[title="Open in a popup"]').click()`);
+  await wait(`!document.querySelector('.floating-presentation') && !!document.querySelector('.quiz-document')`);
+  assert.equal(demo.placement,'popup');
+  await js(`document.querySelector('.artifact-list button').click()`);
+  assert.equal(demo.placement,'popup');
+  handlers.present(demo.id,'side');
+  await wait(`!!document.querySelector('.floating-presentation')`);
+  win.setSize(800,600);
+  await wait(`innerWidth===800`);
+  await wait(`[...document.querySelectorAll('.floating-card')].every(el=>{const r=el.getBoundingClientRect();return r.left>=11&&r.top>=11&&r.right<=innerWidth-11&&r.bottom<=innerHeight-11;})`);
+  await js(`document.querySelector('[aria-label="Close floating card"]').click();[...document.querySelectorAll('.qz-button')].find(button=>button.textContent==='Close quiz').click()`);
+  await wait(`document.querySelectorAll('.floating-card').length===0`);
+
+  win.setSize(1460,920);await wait(`innerWidth===1460`);
+  const source=await files.create('Study material','markdown','# Energy\n\nEnergy is conserved in an isolated system.\n\n## Momentum\n\nMomentum is mass times velocity.');
+  const reference={fileId:source.id,label:'Conservation of energy',quote:'Energy is conserved in an isolated system.'};
+  assert.equal(isLongMarkdown('Brief explanation.'),false);
+  assert.equal(isLongMarkdown('word '.repeat(401)),true);
+  assert.equal(isLongMarkdown('x'.repeat(3001)),true);
+  await show({title:'Quick note',markdown:'Energy is conserved.'});
+  assert.equal(displayed.at(-1).placement,'popup');assert.equal(files.activeId,source.id);
+  await assert.rejects(show({title:'Missing citations',markdown:'Energy '.repeat(450)}),/source passages/);
+  await assert.rejects(show({title:'Bad citation',markdown:'Energy '.repeat(450),sources:[{...reference,quote:'An invented passage'}]}),/not found/);
+  await show({title:'Detailed explanation',markdown:'# Energy explained\n\n'+'Energy is conserved. '.repeat(160),sources:[reference]});
+  const explanation=files.get(files.activeId).info;assert.equal(explanation.kind,'markdown');
+  assert.ok(files.content(explanation.id).text.includes('codex-source://'));
+  await wait(`!!document.querySelector('a[href^="codex-source://"]')`);
+  win.webContents.invalidate();await new Promise(resolve=>setTimeout(resolve,500));
+  await writeFile(path.join(os.tmpdir(),'codex-markdown-file.png'),(await win.webContents.capturePage()).toPNG());
+  await js(`document.querySelector('a[href^="codex-source://"]').click()`);
+  await wait(`!!document.querySelector('.source-passage')`);
+  assert.equal(files.activeId,source.id);
+  assert.equal(await js(`document.querySelector('.source-passage').textContent`),reference.quote);
+  const pdf=await files.create('PDF source','pdf','Energy is conserved.');
+  assert.equal(verifySource(files,{fileId:pdf.id,label:'Energy',page:1}).page,1);
+  assert.throws(()=>verifySource(files,{fileId:pdf.id,label:'Energy',page:2}),/existing PDF page/);
+  const reloaded=new DocumentStore(path.join(profile,'files'),()=>{});await reloaded.initialize();
+  const savedQuiz=reloaded.list().find(file=>file.id===quizFile.id);assert.ok(!savedQuiz,'Closed quiz must stay closed in the working list');
+  await reloaded.open([savedPath]);const restored=quiz.restoreFile(reloaded.content(reloaded.activeId).text);
+  assert.equal(restored.quiz.stats.accuracy,100);
+  assert.deepEqual(errors,[]);
+  console.log('PASS: interactive quiz files, saved progress and reopen, short Markdown popup default, long Markdown file default, verified text links and PDF pages, invalid-source rejection, and floating demonstration controls.');
+} catch(error) {console.error(error,errors);process.exitCode=1;}
+finally {quiz.shutdown();win.destroy();await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:200});app.exit(process.exitCode||0);}
+
+}
+void main().catch(error=>{console.error(error);app.exit(1);});

@@ -3,7 +3,7 @@ import DOMPurify from 'dompurify';
 import * as pdfjs from 'pdfjs-dist';
 import workerURL from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import 'pdfjs-dist/web/pdf_viewer.css';
-import type { DocumentContent, DocumentInfo, PDFAnnotations } from '../shared';
+import type { DocumentContent, DocumentInfo, DocumentSource, PDFAnnotations } from '../shared';
 import Icon from './Icon';
 import { RichMarkdown } from './RichText';
 import PDFAnnotationLayer from './PDFAnnotationLayer';
@@ -57,7 +57,8 @@ function PDFPage({pdf,page,width,zoom,scrollHost,onError,file,annotations,voice}
   </div>;
 }
 
-export default function DocumentViewer({file,onError,annotations,voice}:{file:DocumentInfo;onError:(message:string)=>void;annotations:PDFAnnotations;voice:PDFVoice}) {
+export default function DocumentViewer({file,onError,annotations,voice,source}:{file:DocumentInfo;onError:(message:string)=>void;annotations:PDFAnnotations;voice:PDFVoice;source?:DocumentSource|null}) {
+  const documentRoot=useRef<HTMLDivElement>(null);
   const [content,setContent]=useState<DocumentContent|null>(null),[bytes,setBytes]=useState<Uint8Array|null>(null);
   const [page,setPage]=useState(1),[zoom,setZoom]=useState(1),[editing,setEditing]=useState(false),[draft,setDraft]=useState(''),[loading,setLoading]=useState(true);
   const [pdf,setPDF]=useState<pdfjs.PDFDocumentProxy|null>(null),[imageURL,setImageURL]=useState('');
@@ -97,8 +98,22 @@ export default function DocumentViewer({file,onError,annotations,voice}:{file:Do
   async function saveDraft(){try{const next=await window.desktop!.updateDocument(file.id,draft);setContent(next);setEditing(false);}catch(error){errorRef.current(error instanceof Error?error.message:String(error));}}
   const editable=['text','markdown','html'].includes(file.kind)&&file.extension!=='.rtf';
   const sanitized=content?.html?DOMPurify.sanitize(content.html,{FORBID_TAGS:['script','iframe','form','object','embed','style'],FORBID_ATTR:['style'],ADD_DATA_URI_TAGS:['img']}):'';
+  useEffect(()=>{
+    const root=documentRoot.current;
+    if(loading||editing||!root||source?.fileId!==file.id||!source.quote||file.kind==='pdf')return;
+    const paper=root.querySelector('.document-paper');if(!paper)return;
+    const walker=document.createTreeWalker(paper,NodeFilter.SHOW_TEXT),nodes:Text[]=[];let combined='',node;
+    while((node=walker.nextNode())){nodes.push(node as Text);combined+=node.textContent??'';}
+    let offset=combined.indexOf(source.quote);
+    if(offset<0){errorRef.current('The cited passage could not be located in the preview. Switch to Edit to find the exact source text.');return;}
+    let first:Text|undefined;
+    for(const node of nodes){if(offset<node.length){first=node;break;}offset-=node.length;}
+    const target=first?.parentElement?.closest('p,li,pre,h1,h2,h3,h4,blockquote')??first?.parentElement;
+    target?.classList.add('source-passage');target?.scrollIntoView({block:'center',behavior:'smooth'});
+    return()=>target?.classList.remove('source-passage');
+  },[source,file.id,file.kind,loading,editing,content]);
   const annotationCount=annotations.overlays.filter(item=>item.fileId===file.id).length+annotations.highlights.filter(item=>item.fileId===file.id).length+(annotations.pointer?.fileId===file.id?1:0);
-  return <div className="document-view">
+  return <div className="document-view" ref={documentRoot}>
     <div className="doc-toolbar drag"><div className="doc-title"><span className={`file-glyph small ${file.kind}`}>{file.extension.slice(1).toUpperCase().slice(0,4)}</span><strong title={file.originalPath||file.name}>{file.name}</strong></div><div className="doc-actions">
       {file.kind==='pdf'&&<><span className="page-count">{page}<em>/</em>{pdf?.numPages??file.pageCount??'…'}</span>
       {annotationCount>0&&<button className="quiet-button" title="Clear temporary overlays, highlights, and pointing" onClick={()=>void window.desktop!.dismissPDFAnnotation().catch(error=>errorRef.current(error.message))}><Icon name="close" size={14}/>Clear overlays</button>}

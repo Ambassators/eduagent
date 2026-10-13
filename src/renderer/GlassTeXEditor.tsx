@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { DocumentInfo } from '../shared';
+import type { DocumentInfo, DocumentSource } from '../shared';
 import { applyTeXPatch, canonicalTeXShortcut, cleanTeXSettings, texCategoryOrder, TeXHistory, type TeXCommand, type TeXPatch, type TeXSettings } from '../glasstex';
 import catalogue from '../glasstex/commands.json';
 import { flushTeX, persistTeX } from './tex-persistence';
@@ -16,7 +16,7 @@ function storedCommands(): TeXCommand[] {
   return Array.isArray(value) ? value.filter(command => command && ['id', 'title', 'category', 'symbol', 'latex', 'mode'].every(key => typeof command[key] === 'string')) : [];
 }
 
-export default function GlassTeXEditor({ file, sidebar, onError, onOpenFiles }: { file: DocumentInfo; sidebar: HTMLElement | null; onError: (message: string) => void; onOpenFiles: () => void }) {
+export default function GlassTeXEditor({ file, sidebar, onError, onOpenFiles, sourceTarget }: { file: DocumentInfo; sidebar: HTMLElement | null; onError: (message: string) => void; onOpenFiles: () => void; sourceTarget?: DocumentSource|null }) {
   const renderActive = useRenderActive();
   const frame = useRef<HTMLIFrameElement>(null), sourceEditor = useRef<HTMLTextAreaElement>(null), search = useRef<HTMLInputElement>(null), list = useRef<HTMLDivElement>(null);
   const [source, setSource] = useState(''), [loaded, setLoaded] = useState(false), [ready, setReady] = useState(false);
@@ -38,6 +38,18 @@ export default function GlassTeXEditor({ file, sidebar, onError, onOpenFiles }: 
   const doc = useRef({ source: '', revision: file.revision, loaded: false, recovering: false });
   const history = useRef(new TeXHistory());
   const sourceSelection = useRef({ start: 0, end: 0 });
+  const locatedSource = useRef<DocumentSource|null>(null);
+  useEffect(()=>{
+    if(!loaded||sourceTarget?.fileId!==file.id||!sourceTarget.quote||locatedSource.current===sourceTarget)return;
+    if(!sourceMode){setSourceMode(true);return;}
+    const start=source.indexOf(sourceTarget.quote);
+    if(start<0){onError('The cited passage is no longer in this source.');return;}
+    const editor=sourceEditor.current;if(!editor)return;
+    editor.focus({preventScroll:true});editor.setSelectionRange(start,start+sourceTarget.quote.length);
+    const lineHeight=parseFloat(getComputedStyle(editor).lineHeight)||20;
+    editor.scrollTop=Math.max(0,(source.slice(0,start).split('\n').length-1)*lineHeight-editor.clientHeight/2);
+    locatedSource.current=sourceTarget;
+  },[loaded,sourceTarget,file.id,sourceMode,source,onError]);
   const mounted = useRef(true), errorRef = useRef(onError); errorRef.current = onError;
   const windows = !navigator.userAgent.includes('Mac');
   const commands: TeXCommand[] = [...catalogue, ...custom].map(command => ({ ...command, shortcut: (shortcuts[command.id] ?? command.shortcut)?.replace(windows ? /^cmd\+/ : /$^/, 'ctrl+') }));

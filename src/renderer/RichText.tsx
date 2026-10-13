@@ -1,5 +1,5 @@
 import { isValidElement, useEffect, useState } from 'react';
-import Markdown from 'react-markdown';
+import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -30,8 +30,8 @@ export function normalizeMath(text: string) {
     .replace(/\\\(([\s\S]+?)\\\)/g,(_,math:string)=>`$${math.trim()}$`)).join('');
 }
 export function RichMarkdown({ text }: { text: string }) {
-  return <div className="markdown-body"><Markdown remarkPlugins={[remarkGfm,remarkMath]} rehypePlugins={[[rehypeKatex,{trust:false,throwOnError:false,maxExpand:1000}]]} components={{
-    a:({href,children})=><a href={href} onClick={event=>{event.preventDefault();if(href)void window.desktop?.openURL(href);}}>{children}</a>,
+  return <div className="markdown-body"><Markdown urlTransform={url=>url.startsWith('codex-source://')?url:defaultUrlTransform(url)} remarkPlugins={[remarkGfm,remarkMath]} rehypePlugins={[[rehypeKatex,{trust:false,throwOnError:false,maxExpand:1000}]]} components={{
+    a:({href,children})=><a href={href} onClick={event=>{event.preventDefault();if(href)void window.desktop?.openURL(href).catch(error=>window.dispatchEvent(new CustomEvent('document-link-error',{detail:error.message})));}}>{children}</a>,
     pre:({children})=>{
       if(isValidElement<{className?:string;children?:unknown}>(children)&&children.props.className==='language-mermaid')return <MermaidView text={String(children.props.children??'').trim()}/>;
       return <pre>{children}</pre>;

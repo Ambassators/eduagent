@@ -98,14 +98,14 @@ mark { color: inherit; background: none; }
   grid-template-columns: var(--left-w, 252px) minmax(380px, 1fr) var(--right-w, 364px);
   height: 100%;
 }
-.workspace.with-presentation { grid-template-columns: var(--left-w, 228px) minmax(340px, 1fr) var(--present-w, minmax(300px, .9fr)) var(--right-w, 344px); }
 
 .drag { -webkit-app-region: drag; user-select: none; }
 .drag button, .drag [role=tab] { -webkit-app-region: no-drag; }
 
 .rail { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
-.rail-left { padding: 0; animation: rise .55s var(--ease) both; }
-.rail-right { padding: 0 12px 12px 12px; animation: rise .55s var(--ease) .12s both; }
+/* Navigation is visible on first paint, including when startup happens without focus. */
+.rail-left { padding: 0; }
+.rail-right { padding: 0 12px 12px 12px; }
 .rail-top { height: 44px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; }
 .platform-darwin .rail-left .rail-top { padding-left: 76px; }
 .rail-right .rail-top { padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 4px); }
@@ -204,9 +204,7 @@ mark { color: inherit; background: none; }
   box-shadow: -1px 0 0 var(--rule), 1px 0 0 var(--rule), 0 0 40px -12px rgba(0, 0, 0, .28);
   position: relative; z-index: 1;
 }
-.stage-presentation { box-shadow: 1px 0 0 var(--rule); background: var(--sheet); }
 .stage-top { height: 44px; flex-shrink: 0; display: flex; align-items: center; min-width: 0; padding: 0 8px; border-bottom: 1px solid var(--rule); }
-.stage-presentation .stage-top .section-label { padding: 0 8px; }
 
 .file-tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; padding: 3px; }
 .file-tabs::-webkit-scrollbar { display: none; }
@@ -590,9 +588,6 @@ html[data-render-active='false'] *::after {
 
 @media (max-width: 1280px) {
   .workspace { grid-template-columns: var(--left-w, 224px) minmax(340px, 1fr) var(--right-w, 336px); }
-  .workspace.with-presentation { grid-template-columns: minmax(320px, 1fr) var(--present-w, minmax(280px, 1fr)) var(--right-w, 320px); }
-  .with-presentation .rail-left { display: none; }
-  .platform-darwin .with-presentation .stage:not(.stage-presentation) :is(.stage-top, .doc-toolbar) { padding-left: 72px; }
   .mic-button { width: 100px; height: 100px; }
 }
 @media (max-height: 820px) {
@@ -628,3 +623,5 @@ body.resizing { user-select: none; }
 body.resizing-x { cursor: col-resize; }
 body.resizing-y { cursor: row-resize; }
 body.resizing iframe, body.resizing webview { pointer-events: none; }
+
+.settings-dialog .dialog-footer [role="status"] { margin-right: auto; align-self: center; color: var(--ink-2); font-size: 12px; }

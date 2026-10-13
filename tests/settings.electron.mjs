@@ -1,0 +1,77 @@
+// Run after npm run build: electron tests/settings.electron.mjs
+import {app,BrowserWindow,ipcMain} from 'electron';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import {writeFile} from 'node:fs/promises';
+import {defaultSettings} from '../dist/main/shared.js';
+async function main() {
+await app.whenReady();
+let settings={...defaultSettings}, active=0, peak=0, fail=false;
+const history=[];
+const handlers={windowActivity:()=>true,status:()=>({connected:true,account:null,models:[{model:'quiz-model',displayName:'Quiz model',isDefault:false}],voices:[],voiceAvailable:false,settings,platform:process.platform,darkMode:false}),workspace:()=>({files:[],activeId:null,artifacts:[],thinking:{tokens:0},annotations:{overlays:[],highlights:[],pointer:null},quiz:{}}),browserState:()=>null,stop:()=>{},interrupt:()=>{},saveChat:()=>{},syncTranscript:()=>{},settings:async next=>{peak=Math.max(peak,++active);await new Promise(r=>setTimeout(r,80));active--;if(fail){fail=false;throw Error('Test save failure');}settings={...next};history.push(settings);return settings;}};
+for(const [name,fn] of Object.entries(handlers))ipcMain.handle(`voice:${name}`,(_,...args)=>fn(...args));
+const win=new BrowserWindow({width:1100,height:900,show:false,webPreferences:{preload:path.resolve('dist/main/main/preload.cjs'),contextIsolation:true,sandbox:true,offscreen:true}});
+const js=source=>win.webContents.executeJavaScript(source);
+const wait=async source=>{for(let i=0;i<100;i++){if(await js(source))return;await new Promise(r=>setTimeout(r,30));}throw Error('Timeout: '+source);};
+const button=text=>`[...document.querySelectorAll('.settings-dialog:last-of-type .dialog-footer button')].find(b=>b.textContent==='${text}')`;
+try{
+ await win.loadFile(path.resolve('dist/renderer/index.html'));
+ await wait(`!!document.querySelector('.account.signed-out')`);
+ await js(`document.querySelector('[title="Preferences"]').click()`);
+ await wait(`document.querySelector('.settings-dialog:last-of-type').open`);
+ assert.equal(await js(`${button('Undo')}.disabled`),true);
+ await js(`document.querySelector('[aria-label="Appearance"] button:nth-child(2)').click();document.querySelector('[name="lowPowerMode"]').click()`);
+ await wait(`document.querySelector('.dialog-footer [role="status"]').textContent==='Changes save automatically'`);
+ assert.equal(settings.theme,'light');assert.equal(settings.lowPowerMode,!defaultSettings.lowPowerMode);assert.equal(peak,1);
+ await js(`${button('Undo')}.click()`);
+ await wait(`${button('Undo')}.disabled && document.querySelector('.dialog-footer [role="status"]').textContent==='Changes save automatically'`);
+ assert.deepEqual(settings,defaultSettings);
+ await js(`document.querySelector('[aria-label="Appearance"] button:nth-child(3)').click()`);
+ await wait(`!${button('Undo')}.disabled`);
+ await js(`${button('Undo')}.click()`);
+ await wait(`document.querySelector('.dialog-footer [role="status"]').textContent==='Changes save automatically'`);
+ assert.equal(settings.theme,'system');assert.equal(peak,1);
+ await js(`document.querySelector('[aria-label="Appearance"] button:nth-child(2)').click();${button('Done')}.click()`);
+ await wait(`!document.querySelector('.settings-dialog:last-of-type').open`);
+ assert.equal(settings.theme,'light');
+ await js(`document.querySelector('[title="Preferences"]').click()`);
+ await wait(`document.querySelector('.settings-dialog:last-of-type').open`);
+ await js(`document.querySelector('[aria-label="Appearance"] button:nth-child(3)').click()`);
+ await wait(`!${button('Undo')}.disabled`);
+ await js(`${button('Undo')}.click()`);
+ await wait(`document.querySelector('.dialog-footer [role="status"]').textContent==='Changes save automatically'`);
+ assert.equal(settings.theme,'light');
+ fail=true;await js(`document.querySelector('[name="lowPowerMode"]').click()`);
+ await wait(`!!document.querySelector('.settings-dialog:last-of-type .dialog-error')`);
+ await js(`document.querySelector('.dialog-error button').click()`);
+ await wait(`!document.querySelector('.settings-dialog:last-of-type .dialog-error') && document.querySelector('.dialog-footer [role="status"]').textContent==='Changes save automatically'`);
+ assert.equal(settings.lowPowerMode,!defaultSettings.lowPowerMode);
+ await js(`${button('Undo')}.click()`);
+ await wait(`document.querySelector('.dialog-footer [role="status"]').textContent==='Changes save automatically'`);
+ await js(`(()=>{const input=document.querySelector('.settings-dialog:last-of-type textarea');input.focus();Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'Updated instructions');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+ await wait(`document.querySelector('.settings-dialog:last-of-type textarea').value==='Updated instructions'`);
+ await js(`${button('Done')}.click()`);
+ await wait(`!document.querySelector('.settings-dialog:last-of-type').open`);
+ assert.equal(settings.prompt,'Updated instructions');
+ await js(`document.querySelector('[title="Preferences"]').click()`);
+ await wait(`document.querySelector('.settings-dialog:last-of-type').open`);
+ await js(`(()=>{const input=document.querySelector('[name="quizEffort"]');input.value='high';input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+ await wait(`document.querySelector('.dialog-footer [role="status"]').textContent==='Changes save automatically' && document.querySelector('[name="quizEffort"]').value==='high'`);
+ assert.equal(settings.quizReasoningEffort,'high');assert.equal(settings.reasoningEffort,defaultSettings.reasoningEffort);
+ await js(`(()=>{const input=document.querySelector('[name="quizModel"]');input.value='quiz-model';input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+ await wait(`document.querySelector('.dialog-footer [role="status"]').textContent==='Changes save automatically' && document.querySelector('[name="quizModel"]').value==='quiz-model'`);
+ assert.equal(settings.quizModel,'quiz-model');assert.equal(settings.model,defaultSettings.model);
+ await js(`${button('Done')}.click()`);
+ await wait(`!document.querySelector('.settings-dialog:last-of-type').open`);
+ await js(`document.querySelector('[title="Preferences"]').click()`);
+ await wait(`document.querySelector('.settings-dialog:last-of-type').open`);
+ assert.equal(await js(`document.querySelector('[name="quizEffort"]').value`),'high');
+ assert.equal(await js(`document.querySelector('[name="quizModel"]').value`),'quiz-model');
+ await js(`document.querySelector('[name="quizModel"]').scrollIntoView({block:'center'})`);
+ win.webContents.invalidate();await new Promise(r=>setTimeout(r,200));
+ await writeFile('/tmp/eduagent-settings.png',(await win.webContents.capturePage()).toPNG());
+ console.log('PASS: immediate saves, serial writes, Undo during saving, Done, fresh reopening baseline, failure and retry, independent generator effort.');
+} catch(e){console.error(e);process.exitCode=1;}finally{win.destroy();app.exit(process.exitCode||0);}
+
+}
+void main().catch(e=>{console.error(e);app.exit(1);});

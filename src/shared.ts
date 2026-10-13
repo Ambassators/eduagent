@@ -8,13 +8,13 @@ export interface Settings {
   codexPath: string;
   inputDevice: string;
   reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh';
+  quizModel: string;
+  quizReasoningEffort: Settings['reasoningEffort'];
   transparency: 'mica' | 'acrylic' | 'opaque';
   theme: 'system' | 'light' | 'dark';
   /** Use a prerecorded microphone orb loop instead of live gradient animation. */
   lowPowerMode: boolean;
   demoPlacement: 'side' | 'popup';
-  /** Opt-in: the quiz coach writes a follow-up after every answer. */
-  quizFollowUps: boolean;
   autoCompact: boolean;
   compactAtTokens: number;
   agentTools: boolean;
@@ -35,16 +35,17 @@ export interface Settings {
   standbyFalseWakeSeconds: number;
 }
 export const defaultSettings: Settings = {
-  voice: '', model: 'gpt-6.1-sol', codexPath: '', inputDevice: '', reasoningEffort: 'low',
-  transparency: 'acrylic', theme: 'system', lowPowerMode: false, demoPlacement: 'side', quizFollowUps: false, autoCompact: true, compactAtTokens: 48000,
-  agentTools: false,
-  bridgeResearch: false,
+  voice: '', model: 'gpt-6.1-sol', codexPath: '', inputDevice: '', reasoningEffort: 'medium',
+  quizModel: 'gpt-6.1-sol', quizReasoningEffort: 'medium',
+  transparency: 'acrylic', theme: 'system', lowPowerMode: true, demoPlacement: 'side', autoCompact: true, compactAtTokens: 200000,
+  agentTools: true,
+  bridgeResearch: true,
   proactiveExplain: false,
-  priority: true,
+  priority: false,
   standbyAfterSeconds: 60,
   voiceCatchUp: 'realtime',
   voiceAckFiller: true,
-  standbyWakeMs: 300,
+  standbyWakeMs: 100,
   standbyFalseWakeSeconds: 10,
   prompt: 'You are a thoughtful voice companion in a document workspace. Speak naturally. You already receive the currently open file as quiet context. Answer simple questions directly. For deep reasoning, web search, document edits, or screen demonstrations, delegate to the backend and ask it to call think with an optional message. The Think thread already has the full conversation transcript and current file context; do not repeat them. Keep talking while it works. Only describe completed actions after their tools succeed.'
 };
@@ -66,12 +67,13 @@ export interface TranscriptEntry { id: string; role: 'user' | 'assistant'; text:
 /** A saved chat. `think` holds Think's side of the conversation, kept apart as in the live timeline. */
 export interface SavedChat { id: string; title: string; created: number; updated: number; entries: TranscriptEntry[]; think: TranscriptEntry[] }
 export interface ChatSummary { id: string; title: string; created: number; updated: number; count: number }
-export type DocumentKind = 'pdf' | 'word' | 'markdown' | 'text' | 'tex' | 'image' | 'html' | 'binary';
+export type DocumentKind = 'pdf' | 'word' | 'markdown' | 'text' | 'tex' | 'image' | 'html' | 'quiz' | 'binary';
 export interface DocumentInfo {
   id: string; name: string; kind: DocumentKind; extension: string; originalPath: string;
   size: number; revision: number; dirty: boolean; pageCount?: number; warning?: string;
 }
 export interface DocumentContent { info: DocumentInfo; text: string; html?: string; pages?: { number: number; text: string; width: number; height: number }[]; fields?: { name: string; type: string; value: string | boolean }[] }
+export interface DocumentSource { fileId: string; label: string; page?: number; quote?: string }
 export interface Presentation { id: string; title: string; kind: 'text' | 'demo'; content: string; placement: 'side' | 'popup'; time: number }
 /** `delegating`: the voice bridge is handling a request (it may run tools directly without a Think job). */
 export interface ThinkState { threadId: string | null; busy: boolean; delegating: boolean; compacting: boolean; queued: number; tokens: number; contextWindow: number | null; lastCompacted?: number; contextVersion: number }
@@ -137,7 +139,7 @@ export interface DesktopAPI {
   setPage(id: string, page: number): Promise<void>;
   /** Where the mouse pointer is in the open document while the user speaks. */
   pointer(text: string): Promise<void>;
-  syncTranscript(entries: TranscriptEntry[]): Promise<void>;
+  syncTranscript(entries: TranscriptEntry[], routeSpokenQuiz?: boolean): Promise<void>;
   think(message?: string): Promise<void>;
   cancelThink(): Promise<void>;
   compact(): Promise<void>;
@@ -149,7 +151,8 @@ export interface DesktopAPI {
   dismissPDFAnnotation(id?: string): Promise<void>;
   answerQuiz(input: QuizAnswerInput): Promise<QuizState>;
   setQuizAdaptive(enabled: boolean): Promise<QuizState>;
+  setQuizMode(mode: 'ai' | 'programmatic'): Promise<QuizState>;
+  setQuizMaxQuestions(count: number): Promise<QuizState>;
   closeQuiz(): Promise<QuizState>;
-  skipQuizFollowUp(): Promise<QuizState>;
   openQuizSource(source: QuizSource): Promise<unknown>;
 }

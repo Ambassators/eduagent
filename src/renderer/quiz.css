@@ -1,221 +1,258 @@
-/* Quiz — a focused practice column: one question at a time, a pinned action bar, and a result that teaches. */
+/* Quiz — a single centred card. The question stays in place while it is checked, explained, and replaced.
+   Colours come from the studio tokens, so light and dark follow the app theme. */
 
-.quiz-side { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.quiz-side.with-presentation { flex: 0 1 auto; max-height: 58%; border-top: 1px solid var(--rule); }
-
-.qz {
-  --qz-right: var(--ok);
-  --qz-wrong: var(--danger);
-  --qz-right-soft: color-mix(in srgb, var(--ok) 11%, transparent);
-  --qz-wrong-soft: color-mix(in srgb, var(--danger) 10%, transparent);
-  --qz-radius: 12px;
-  flex: 1; min-height: 0; display: flex; flex-direction: column;
-  color: var(--ink); background: var(--sheet);
+.quiz-document {
+  --qz-right: var(--ok); --qz-wrong: var(--danger);
+  /* One motion for every state change (after NearKey): long, decelerating, and never faster in one place than another.
+     Only direct hover/press feedback stays quick. */
+  --qz-motion: 1.1s; --qz-curve: cubic-bezier(.22, 1, .36, 1); --qz-state: var(--qz-motion) var(--qz-curve);
+  /* A swap overlaps an outgoing and incoming fade so the view is never empty, and neither side snaps. */
+  --qz-half: .55s; --qz-overlap: .12s; --qz-soft: cubic-bezier(.45, 0, .55, 1);
   container-type: inline-size;
 }
+.quiz-document .doc-actions { gap: 4px; }
 
-/* ---------- Header ---------- */
+/* ---------- Toolbar ---------- */
 
-.qz-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 14px 0 22px; }
-.qz-title { min-width: 0; }
-.qz-title h3 { margin: 0; font: 500 16px/1.3 var(--display); letter-spacing: -.03em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.qz-title p { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
-.qz-count { font: 600 11px/1 var(--mono); color: var(--ink); margin-right: 4px; }
-.qz-count span { color: var(--ink-3); font-weight: 400; }
-.qz-pill { font: 500 9px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; padding: 4px 7px; border-radius: 999px; color: var(--accent-text); background: var(--accent-soft); }
-.qz-close { width: 30px; height: 30px; margin-top: -4px; }
-
-/* ---------- Progress track ---------- */
-
-.qz-track { display: flex; gap: 3px; height: 5px; margin: 16px 22px 0; }
-.qz-track > span { flex: 1; min-width: 0; border-radius: 99px; background: var(--rule-2); transition: background-color .3s var(--ease), transform .3s var(--ease); }
-.qz-track > .is-done { background: var(--accent); }
-.qz-track > .is-right { background: var(--qz-right); }
-.qz-track > .is-wrong { background: var(--qz-wrong); }
-.qz-track > .is-now { background: var(--ink-3); animation: breathe 1.6s ease-in-out infinite; }
-.qz-track.is-bar { display: block; overflow: hidden; border-radius: 99px; background: var(--rule-2); }
-.qz-track.is-bar > span { display: block; height: 100%; background: var(--accent); transition: width .35s var(--ease); }
-
-/* ---------- Live stats ---------- */
-
-.qz-stats { display: flex; align-items: center; gap: 22px; padding: 14px 22px 16px; border-bottom: 1px solid var(--rule); }
-.qz-stat { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.qz-stat strong { font: 600 17px/1 var(--mono); letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
-.qz-stat span { font: 500 9px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); white-space: nowrap; }
-.qz-stat.is-hot strong { color: var(--warn); }
-
-.qz-switch { position: relative; display: inline-flex; align-items: center; gap: 8px; margin-left: auto; font-size: 11.5px; font-weight: 500; color: var(--ink-2); cursor: pointer; user-select: none; }
+.qz-switch { -webkit-app-region: no-drag; position: relative; display: inline-flex; align-items: center; gap: 9px; height: 34px; padding: 0 12px; border-radius: 999px; font-size: 12px; font-weight: 500; color: var(--ink-2); cursor: pointer; user-select: none; }
+.qz-switch:hover { background: var(--sheet-2); color: var(--ink); }
 .qz-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
 .qz-switch-track { position: relative; width: 28px; height: 16px; border-radius: 99px; background: var(--rule-2); transition: background-color .2s var(--ease); }
-.qz-switch-track > span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--sheet); box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: transform .2s var(--ease); }
+.qz-switch-track > span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / .3); transition: transform .2s var(--ease); }
 .qz-switch input:checked + .qz-switch-track { background: var(--accent); }
 .qz-switch input:checked + .qz-switch-track > span { transform: translateX(12px); }
 .qz-switch input:focus-visible + .qz-switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
-.qz-switch input:disabled ~ * { opacity: .5; }
-.qz-switch:has(input:disabled) { cursor: default; }
+.qz-switch:has(input:disabled) { opacity: .5; cursor: default; }
 
-/* ---------- Body ---------- */
+/* ---------- Stage ---------- */
 
-.qz-body { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 22px 28px; scroll-padding-bottom: 24px; }
-.qz-step { animation: rise .35s var(--ease) both; }
+/* The quiz owns this pane, so it sits straight on the document surface: no card, no backdrop.
+   Padding lives on the stage, not the scroller, so the pinned action bar sits flush with the bottom edge. */
+.qz-scroll { flex: 1; min-height: 0; overflow-y: auto; background: var(--sheet); scrollbar-gutter: stable both-edges; }
+.qz-stage { display: flex; flex-direction: column; min-height: 100%; padding: clamp(24px, 6vh, 56px) clamp(20px, 6cqw, 72px) 0; }
+/* Height animates so the vertically centred column glides instead of jumping when content changes. */
+/* Fills the pane; the cap only stops lines getting unreadably long on very wide windows. */
+.qz-column { --qz-pad: 0px; flex: 0 0 auto; width: min(100%, 960px); margin: auto; overflow: clip; overflow-clip-margin: 8px; }
+.qz-column[data-motion="ready"] { transition: height var(--qz-state); }
+.qz-step { display: flex; flex-direction: column; }
 
-.qz-label { display: block; font: 500 9.5px/1.3 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
-.qz kbd { display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 4px; font: 500 9.5px/1 var(--mono); color: var(--ink-2); background: var(--sheet-2); box-shadow: inset 0 0 0 1px var(--rule-2), inset 0 -1px 0 var(--rule-2); vertical-align: 1px; }
+/* Swaps never show a blank frame: the outgoing view stays on screen and fades out while the incoming view fades in
+   just behind it. Content only fades; movement belongs to the column's height so the two never fight. */
+.qz-swap { position: relative; }
+.qz-ghosts { position: absolute; inset: 0 0 auto; z-index: 1; pointer-events: none; }
+.qz-ghosts * { animation: none !important; transition: none !important; }
+.qz-ghosts > .qz-ghost { animation: qz-fade-out var(--qz-half) var(--qz-soft) forwards !important; }
+.qz-swap > .is-entering { animation: qz-fade calc(var(--qz-motion) - var(--qz-overlap)) var(--qz-curve) var(--qz-overlap) both; }
 
-.qz-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; font: 500 10px/1.3 var(--mono); color: var(--ink-3); }
-.qz-topic { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
-.qz-level { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; white-space: nowrap; }
-.qz-pips { display: inline-flex; gap: 2px; }
-.qz-pips i { width: 4px; height: 9px; border-radius: 1px; background: var(--rule-2); }
-.qz-pips i.on { background: var(--ink-2); }
-.qz-tag { padding: 3px 7px; border-radius: 99px; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
-.qz-tag.is-accent { color: var(--accent-text); background: var(--accent-soft); }
+.qz-column .markdown-body { font-size: inherit; line-height: inherit; color: inherit; }
+.qz-column .markdown-body p { margin: 0 0 .55em; }
+.qz-column .markdown-body > :first-child { margin-top: 0; }
+.qz-column .markdown-body > :last-child { margin-bottom: 0; }
+.qz-column .markdown-body pre { max-width: 100%; overflow: auto; }
+.qz-column kbd { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 5px; font: 500 10px/1 var(--mono); color: var(--ink-2); background: var(--sheet-2); box-shadow: inset 0 0 0 1px var(--rule-2); vertical-align: 1px; }
 
-.qz-prompt { margin: 12px 0 20px; font-size: 16px; line-height: 1.55; font-weight: 600; letter-spacing: -.01em; outline: none; }
-.qz-prompt.is-recap { margin: 10px 0 18px; font-size: 13.5px; font-weight: 500; color: var(--ink-2); }
+/* ---------- Header and progress ---------- */
 
-.qz .markdown-body { font-size: inherit; line-height: inherit; }
-.qz .markdown-body p { margin: 0 0 .6em; }
-.qz .markdown-body > :first-child { margin-top: 0; }
-.qz .markdown-body > :last-child, .qz .markdown-body p:last-child { margin-bottom: 0; }
-.qz .markdown-body pre { max-width: 100%; overflow: auto; }
+.qz-top { display: flex; align-items: center; gap: 10px; min-height: 22px; }
+.qz-count { font-size: 14px; font-weight: 600; color: var(--ink); white-space: nowrap; }
+.qz-count span { font-weight: 500; color: var(--ink-3); }
+.qz-tag { padding: 4px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; color: var(--accent-text); background: var(--accent-soft); white-space: nowrap; }
+.qz-topic { min-width: 0; margin-left: auto; padding: 4px 10px; border-radius: 99px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: var(--ink-2); background: var(--sheet-2); }
 
-/* ---------- Choices ---------- */
+.qz-progress { display: flex; gap: 4px; height: 4px; margin-top: 14px; }
+.qz-progress > span { flex: 1; min-width: 0; border-radius: 99px; background: var(--rule-2); transition: background-color var(--qz-state); }
+.qz-progress > .is-done { background: var(--accent); }
+.qz-progress > .is-right { background: var(--qz-right); }
+.qz-progress > .is-wrong { background: var(--qz-wrong); }
+.qz-progress > .is-now { background: var(--ink-3); }
+.qz-progress.is-bar { display: block; overflow: hidden; border-radius: 99px; background: var(--rule-2); }
+.qz-progress.is-bar > span { display: block; height: 100%; border-radius: 99px; background: var(--accent); transition: width var(--qz-state); }
 
-.qz-choices { display: grid; gap: 8px; }
-.qz-choice {
-  display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 13px 14px; text-align: left;
-  font-size: 13px; line-height: 1.5; color: var(--ink);
-  background: var(--sheet); border-radius: var(--qz-radius);
-  box-shadow: inset 0 0 0 1px var(--rule-2);
-  transition: box-shadow .18s var(--ease), background-color .18s var(--ease), transform .18s var(--ease);
+.qz-prompt { margin: 28px 0 24px; font-size: clamp(19px, 3.2cqw, 28px); line-height: 1.4; font-weight: 600; letter-spacing: -.012em; color: var(--ink); overflow-wrap: anywhere; outline: none; }
+
+/* ---------- Options ---------- */
+
+.qz-options { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.qz-option {
+  display: flex; align-items: flex-start; gap: 12px; width: 100%; min-height: 58px; padding: 16px 20px 16px 16px; gap: 14px; text-align: left;
+  font-size: clamp(15px, 2cqw, 17px); line-height: 1.5; color: var(--ink);
+  border-radius: 12px; background: var(--sheet); box-shadow: inset 0 0 0 1px var(--rule-2);
+  transition: box-shadow .15s ease-out, background-color .15s ease-out;
 }
-.qz-choice:hover:not(:disabled) { background: var(--sheet-2); box-shadow: inset 0 0 0 1px var(--ink-3); }
-.qz-choice:active:not(:disabled) { transform: scale(.992); }
-.qz-choice:disabled { opacity: 1; }
-.qz-choices:has(.is-picked) .qz-choice:not(.is-picked) { opacity: .45; }
-.qz-choice.is-picked { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
-.qz-choice-text { flex: 1; min-width: 0; padding-top: 1px; overflow-wrap: anywhere; }
+button.qz-option:hover:not(:disabled) { background: var(--sheet-2); box-shadow: inset 0 0 0 1px var(--ink-3); }
+button.qz-option:active:not(:disabled) { transform: scale(.995); }
+button.qz-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.qz-option:disabled { opacity: 1; cursor: default; }
+.qz-option.is-selected, .qz-option.is-selected:hover:not(:disabled) { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); }
+.qz-option-text { flex: 1; min-width: 0; padding-top: 1px; overflow-wrap: anywhere; }
 
-.qz-key { flex: 0 0 auto; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border-radius: 6px; font: 600 10.5px/1 var(--mono); color: var(--ink-2); background: var(--sheet-2); box-shadow: inset 0 0 0 1px var(--rule-2); }
-.qz-choice:hover:not(:disabled) .qz-key { color: var(--ink); background: var(--sheet); }
-.qz-choice.is-picked .qz-key { color: var(--accent-ink); background: var(--accent); box-shadow: none; }
-.qz-key .loading-ring { width: 11px; height: 11px; border-width: 1.5px; }
+.qz-key { flex: 0 0 auto; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; font: 600 12px/1 var(--mono); color: var(--ink-2); background: var(--sheet-2); box-shadow: inset 0 0 0 1px var(--rule-2); transition: background-color .15s ease-out, color .15s ease-out; }
+.qz-option.is-selected .qz-key { color: var(--accent-ink); background: var(--accent); box-shadow: none; }
+.qz-key .icon { stroke-width: 2.8; }
 
-.qz-hint { margin-top: 16px; font-size: 11px; line-height: 1.6; color: var(--ink-3); }
+/* Review: the same rows, now marked. */
+.qz-options.is-review .qz-option:not(.is-right):not(.is-wrong) { color: var(--ink-2); }
+.qz-options.is-review .qz-option.is-right, .qz-options.is-review .qz-option.is-wrong { animation: qz-mark var(--qz-state) both; }
+.qz-option.is-right { background: color-mix(in srgb, var(--qz-right) 10%, var(--sheet)); box-shadow: inset 0 0 0 1.5px var(--qz-right); }
+.qz-option.is-wrong { background: color-mix(in srgb, var(--qz-wrong) 9%, var(--sheet)); box-shadow: inset 0 0 0 1.5px var(--qz-wrong); }
+.qz-option.is-right .qz-key { color: #fff; background: var(--qz-right); box-shadow: none; animation: qz-fade var(--qz-state) both; }
+.qz-option.is-wrong .qz-key { color: #fff; background: var(--qz-wrong); box-shadow: none; animation: qz-fade var(--qz-state) both; }
+.qz-badge { display: inline-block; margin-top: 6px; font-size: 11.5px; font-weight: 600; }
+.qz-option.is-right .qz-badge { color: var(--qz-right); }
+.qz-option.is-wrong .qz-badge { color: var(--qz-wrong); }
+.qz-why { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--rule); font-size: clamp(14px, 1.8cqw, 15.5px); line-height: 1.6; color: var(--ink-2); animation: qz-fade var(--qz-state) both; }
+
+.qz-more { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; height: 32px; margin-top: 8px; padding: 0 10px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.qz-more:hover { background: var(--sheet-2); color: var(--ink); }
+.qz-chevron { display: inline-grid; transform: rotate(90deg); transition: transform var(--qz-state); }
+.qz-chevron.is-open { transform: rotate(-90deg); }
 
 /* ---------- Short answer ---------- */
 
 .qz-short { display: grid; gap: 8px; }
-.qz-input { display: flex; align-items: center; gap: 6px; padding: 5px 5px 5px 14px; border-radius: var(--qz-radius); background: var(--sheet-2); box-shadow: inset 0 0 0 1px var(--rule-2); transition: box-shadow .18s var(--ease); }
-.qz-input:focus-within { box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 0 4px var(--accent-soft); }
-.qz-input input { flex: 1; min-width: 0; padding: 8px 0; border: 0; outline: none; background: none; font-size: 14px; }
-.qz-input input::placeholder { color: var(--ink-3); }
-.qz-submit { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; color: var(--accent-ink); background: var(--accent); }
-.qz-submit:disabled { opacity: .3; }
-.qz-submit:hover:not(:disabled) { transform: translateX(1px); }
-.qz-short small { font-size: 11px; color: var(--ink-3); }
+.qz-short label { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.qz-short input {
+  width: 100%; height: 54px; padding: 0 16px; border: 0; border-radius: 12px; outline: none;
+  font-size: clamp(15px, 2cqw, 17px); color: var(--ink); background: var(--sheet); box-shadow: inset 0 0 0 1px var(--rule-2);
+  transition: box-shadow .15s ease-out;
+}
+.qz-short input::placeholder { color: var(--ink-3); }
+.qz-short input:focus { box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 4px var(--accent-soft); }
 
-/* ---------- Result ---------- */
+/* ---------- Explanation ---------- */
 
-.qz-verdict { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding: 12px 14px; border-radius: var(--qz-radius); }
-.qz-result.is-right .qz-verdict { background: var(--qz-right-soft); }
-.qz-result.is-wrong .qz-verdict { background: var(--qz-wrong-soft); }
-.qz-verdict-mark { display: grid; place-items: center; flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%; color: #fff; animation: pop .35s var(--ease) both; }
-.qz-result.is-right .qz-verdict-mark { background: var(--qz-right); }
-.qz-result.is-wrong .qz-verdict-mark { background: var(--qz-wrong); }
-.qz-verdict-mark svg { stroke-width: 2.6; }
-.qz-verdict strong { display: block; font: 500 15px/1.2 var(--display); letter-spacing: -.03em; }
-.qz-result.is-right .qz-verdict strong { color: var(--qz-right); }
-.qz-result.is-wrong .qz-verdict strong { color: var(--qz-wrong); }
-.qz-verdict div > span { display: block; margin-top: 2px; font-size: 11.5px; color: var(--ink-2); }
+/* Footnote markers: the last block of rendered Markdown runs inline so a marker can follow its final word. */
+.qz-inline > .markdown-body, .qz-inline > .markdown-body > :last-child { display: inline; }
+.qz-footnotes { display: inline-flex; gap: 3px; margin-left: 4px; vertical-align: super; line-height: 0; animation: qz-fade var(--qz-state) both; }
+.qz-fn { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; font: 600 11px/1 var(--mono); letter-spacing: 0; color: var(--accent-text); background: var(--accent-soft); transition: background-color .15s ease-out, color .15s ease-out; }
+.qz-fn:hover:not(:disabled) { color: var(--accent-ink); background: var(--accent); }
+.qz-fn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.qz-why .qz-fn { min-width: 16px; height: 16px; font-size: 10px; }
 
-.qz-review { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.qz-option { padding: 12px 14px; border-radius: var(--qz-radius); box-shadow: inset 0 0 0 1px var(--rule); animation: rise .35s var(--ease) both; }
-.qz-option:nth-child(2) { animation-delay: .04s; } .qz-option:nth-child(3) { animation-delay: .08s; }
-.qz-option:nth-child(4) { animation-delay: .12s; } .qz-option:nth-child(n+5) { animation-delay: .16s; }
-.qz-option.is-right { background: var(--qz-right-soft); box-shadow: inset 0 0 0 1.5px var(--qz-right); }
-.qz-option.is-wrong { background: var(--qz-wrong-soft); box-shadow: inset 0 0 0 1.5px var(--qz-wrong); }
-.qz-option-head { display: flex; align-items: flex-start; gap: 12px; font-size: 13px; line-height: 1.5; }
-.qz-option:not(.is-right):not(.is-wrong) .qz-option-head { color: var(--ink-2); }
-.qz-option.is-right .qz-key { color: #fff; background: var(--qz-right); box-shadow: none; }
-.qz-option.is-wrong .qz-key { color: #fff; background: var(--qz-wrong); box-shadow: none; }
-.qz-option .qz-key svg { stroke-width: 2.8; }
-.qz-badge { flex: 0 0 auto; margin-top: 2px; padding: 3px 7px; border-radius: 99px; font: 600 9px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
-.qz-option.is-right .qz-badge { color: var(--qz-right); background: var(--qz-right-soft); }
-.qz-option.is-wrong .qz-badge { color: var(--qz-wrong); background: var(--qz-wrong-soft); }
-.qz-why { margin: 8px 0 0 34px; font-size: 12px; line-height: 1.6; color: var(--ink-2); overflow-wrap: anywhere; }
+/* ---------- Actions: pinned to the bottom of the view when the card is taller than it ---------- */
 
-.qz-compare { display: grid; gap: 8px; }
-.qz-compare-row { display: grid; gap: 5px; padding: 12px 14px; border-radius: var(--qz-radius); font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
-.qz-compare-row.is-right { background: var(--qz-right-soft); box-shadow: inset 3px 0 0 var(--qz-right); }
-.qz-compare-row.is-wrong { background: var(--qz-wrong-soft); box-shadow: inset 3px 0 0 var(--qz-wrong); }
+.qz-actions { position: sticky; bottom: 0; z-index: 1; margin-top: 24px; padding: 16px 0 32px; background: var(--sheet); border-top: 1px solid var(--rule); }
+.qz-action-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 42px; }
+.qz-action-row > p, .qz-action-row > .qz-swap { flex: 1; min-width: 0; margin: 0; }
+.qz-action-row p { margin: 0; }
+.qz-hint { font-size: 12.5px; color: var(--ink-3); }
 
-.qz-explain { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--rule); font-size: 12.5px; line-height: 1.65; color: var(--ink-2); }
-.qz-explain > .qz-label { margin-bottom: 8px; }
+.qz-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 46px; padding: 0 22px; border-radius: 12px; font-size: 15px; font-weight: 600; white-space: nowrap; color: var(--ink); background: var(--sheet-2); box-shadow: inset 0 0 0 1px var(--rule); transition: transform .15s var(--ease), background-color .15s var(--ease), opacity .15s; }
+.qz-button:hover:not(:disabled) { background: var(--sheet-3); }
+.qz-button.is-primary { min-width: 140px; color: var(--accent-ink); background: var(--accent); box-shadow: 0 8px 20px -12px var(--accent); }
+.qz-button.is-primary:hover:not(:disabled) { background: var(--accent); transform: translateY(-1px); }
+.qz-button:disabled { cursor: default; }
+.qz-button.is-primary:disabled:not([aria-live]) { opacity: .4; box-shadow: none; }
+.qz-button.is-primary[aria-live] { opacity: .85; }
+.qz-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.qz-button .loading-ring { width: 14px; height: 14px; border-color: color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor; }
 
-.qz-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.qz-sources button { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 26px; padding: 0 9px 0 8px; border-radius: 99px; font-size: 11px; font-weight: 500; color: var(--accent-text); background: var(--sheet); box-shadow: inset 0 0 0 1px var(--rule-2); }
-.qz-sources button:hover:not(:disabled) { box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
-.qz-source-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qz-source-page { font: 500 9.5px/1 var(--mono); color: var(--ink-3); }
+.qz-verdict { display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 700; animation: qz-fade var(--qz-state) both; }
+.qz-verdict > span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; color: #fff; }
+.qz-verdict .icon { stroke-width: 2.8; }
+.is-right .qz-verdict { color: var(--qz-right); }
+.is-right .qz-verdict > span { background: var(--qz-right); }
+.is-wrong .qz-verdict { color: var(--qz-wrong); }
+.is-wrong .qz-verdict > span { background: var(--qz-wrong); }
 
-/* ---------- Pinned action bar ---------- */
-
-.qz-foot { flex: 0 0 auto; padding: 12px 16px 16px; border-top: 1px solid var(--rule); background: var(--sheet); }
-.qz-next { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 44px; padding: 0 12px 0 16px; border-radius: var(--qz-radius); font-size: 13px; font-weight: 600; color: var(--accent-ink); background: var(--accent); box-shadow: 0 6px 18px -8px var(--accent); }
-.qz-next:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 22px -10px var(--accent); }
-.qz-next:active:not(:disabled) { transform: none; }
-.qz-next-hint { display: inline-flex; align-items: center; gap: 8px; }
-.qz-next kbd { color: inherit; background: rgba(255, 255, 255, .18); box-shadow: none; }
-.qz-wait { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 8px 0 14px; border-radius: var(--qz-radius); font-size: 12px; color: var(--ink-2); background: var(--accent-soft); }
-.qz-wait .loading-ring { color: var(--accent); }
-.qz-wait > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qz-wait button { height: 30px; padding: 0 12px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--accent-text); }
-.qz-wait button:hover:not(:disabled) { background: var(--sheet); }
+.qz-error { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5; color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, var(--sheet)); }
+.qz-error .icon { flex: 0 0 auto; margin-top: 2px; }
 
 /* ---------- Summary ---------- */
 
-.qz-summary { display: flex; flex-direction: column; align-items: center; text-align: center; padding-top: 6px; }
-.qz-score { position: relative; width: 132px; height: 132px; }
-.qz-score svg { width: 100%; height: 100%; transform: rotate(-90deg); }
-.qz-score circle { fill: none; stroke-width: 7; }
-.qz-ring-bg { stroke: var(--rule-2); }
-.qz-ring { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .9s var(--ease); animation: qz-ring 1.1s var(--ease) both; }
-.qz-score > div { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.qz-score strong { font: 500 30px/1 var(--display); letter-spacing: -.05em; }
-.qz-score strong small { font-size: 15px; color: var(--ink-3); margin-left: 1px; }
-.qz-score span { margin-top: 5px; font: 500 10px/1 var(--mono); color: var(--ink-3); }
-.qz-summary h4 { margin: 18px 0 6px; font: 500 18px/1.25 var(--display); letter-spacing: -.035em; }
-.qz-summary > p { max-width: 34ch; font-size: 12px; line-height: 1.6; color: var(--ink-2); }
-.qz-summary-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: 100%; margin-top: 22px; }
-.qz-summary-stats .qz-stat { align-items: center; gap: 6px; padding: 14px 6px; border-radius: var(--qz-radius); background: var(--sheet-2); }
-.qz-topics { width: 100%; margin-top: 22px; text-align: left; }
-.qz-topics ul { display: grid; gap: 14px; margin: 12px 0 0; padding: 0; list-style: none; }
-.qz-topics li > div { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; font-size: 12.5px; }
+.qz-summary { align-items: center; text-align: center; padding-top: 10px; }
+.qz-score { position: relative; display: grid; place-items: center; width: 136px; height: 136px; }
+.qz-score svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.qz-score circle { fill: none; stroke-width: 6; }
+.qz-ring-track { stroke: var(--rule-2); }
+.qz-ring { stroke: var(--accent); stroke-linecap: round; animation: qz-ring var(--qz-state) both; }
+.qz-score strong { font: 500 34px/1 var(--display); letter-spacing: -.05em; }
+.qz-score small { margin-left: 1px; font-size: 14px; color: var(--ink-3); }
+.qz-summary h2 { margin: 22px 0 8px; font: 500 clamp(21px, 3cqw, 26px)/1.25 var(--display); letter-spacing: -.035em; color: var(--ink); }
+.qz-summary-score { margin: 0; font-size: 16px; font-weight: 600; color: var(--ink); }
+.qz-summary-details { margin: 6px 0 0; font-size: 13px; color: var(--ink-2); }
+
+.qz-topics { display: grid; gap: 14px; width: 100%; margin: 26px 0 0; padding: 18px 0 0; border-top: 1px solid var(--rule); list-style: none; text-align: left; }
+.qz-topics li > div { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; font-size: 15px; }
 .qz-topics li > div > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qz-topics li strong { font: 500 11px/1.6 var(--mono); color: var(--ink-2); }
-.qz-bar { display: block; height: 5px; border-radius: 99px; background: var(--rule-2); overflow: hidden; }
-.qz-bar > span { display: block; height: 100%; border-radius: inherit; animation: qz-grow .8s var(--ease) both; transform-origin: left; }
+.qz-topics strong { font: 500 12px/1.6 var(--mono); color: var(--ink-2); }
+.qz-bar { display: block; height: 6px; border-radius: 99px; background: var(--rule-2); overflow: hidden; }
+.qz-bar > span { display: block; height: 100%; border-radius: inherit; transform-origin: left; animation: qz-grow var(--qz-state) both; }
 .qz-bar > .is-right { background: var(--qz-right); }
 .qz-bar > .is-mid { background: var(--warn); }
 .qz-bar > .is-wrong { background: var(--qz-wrong); }
+.qz-summary .qz-actions { align-self: stretch; text-align: left; }
 
-.qz-error { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; padding: 10px 12px; border-radius: 10px; font-size: 12px; line-height: 1.5; color: var(--danger); background: var(--qz-wrong-soft); }
-.qz-error svg { margin-top: 2px; }
+/* ---------- Dark theme refinements ---------- */
 
-@keyframes qz-ring { from { stroke-dashoffset: 276.46; } }
+/* In dark, --sheet-2 is darker than the page, so filled wells and secondary controls step up to --sheet-3 instead. */
+.studio.dark .qz-topic, .studio.dark .qz-column kbd, .studio.dark .qz-key { background: var(--sheet-3); }
+.studio.dark button.qz-option:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 5%, var(--sheet)); }
+.studio.dark .qz-option.is-selected { background: color-mix(in srgb, var(--accent) 16%, var(--sheet)); }
+.studio.dark .qz-options.is-review .qz-option.is-right, .qz-options.is-review .qz-option.is-wrong { animation: qz-mark var(--qz-state) both; }
+.qz-option.is-right { background: color-mix(in srgb, var(--qz-right) 13%, var(--sheet)); }
+.studio.dark .qz-option.is-wrong { background: color-mix(in srgb, var(--qz-wrong) 13%, var(--sheet)); }
+.studio.dark .qz-option.is-selected .qz-key { background: var(--accent); }
+.studio.dark .qz-option.is-right .qz-key, .studio.dark .qz-verdict > span { color: #0b0c0d; background: var(--qz-right); }
+.studio.dark .qz-option.is-wrong .qz-key, .studio.dark .is-wrong .qz-verdict > span { color: #0b0c0d; background: var(--qz-wrong); }
+.studio.dark .qz-button:not(.is-primary), .studio.dark .qz-more:hover, .studio.dark .qz-switch:hover { background: var(--sheet-3); }
+.studio.dark .qz-button:not(.is-primary):hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 10%, var(--sheet)); }
+.studio.dark .qz-error { background: color-mix(in srgb, var(--danger) 14%, var(--sheet)); }
+
+/* ---------- Narrow ---------- */
+
+@container (max-width: 560px) {
+  .qz-stage { padding: 20px 16px 0; }
+  .qz-actions { padding-bottom: 16px; }
+  .qz-prompt { margin-top: 20px; }
+  .qz-hint { display: none; }
+  .qz-action-row > .qz-button { flex: 1; }
+  .qz-action-row > p:not(.qz-verdict), .qz-action-row > .qz-swap:not(:has(.qz-verdict)) { flex: 0; }
+}
+
+@keyframes qz-fade { from { opacity: 0; } }
+@keyframes qz-fade-out { to { opacity: 0; } }
+@keyframes qz-mark { from { background-color: var(--sheet); box-shadow: inset 0 0 0 1px var(--rule-2); } }
+@keyframes qz-ring { from { stroke-dashoffset: var(--qz-ring-from); } }
 @keyframes qz-grow { from { transform: scaleX(0); } }
 
-/* Narrow column: tighten gutters. */
-@container (max-width: 340px) {
-  .qz-head { padding-left: 16px; }
-  .qz-track { margin-inline: 16px; }
-  .qz-stats { gap: 16px; padding-inline: 16px; }
-  .qz-body { padding-inline: 16px; }
-  .qz-why { margin-left: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .qz-column[data-motion] { transition: none; }
+  .quiz-document *, .quiz-document *::before { animation: none !important; transition: none !important; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .qz *, .qz *::before { animation: none !important; transition: none !important; }
-}
+.source-passage { background: var(--accent-soft); box-shadow: 0 0 0 4px var(--accent-soft); border-radius: 4px; }
+
+/* Small source popover anchored to its toolbar button. */
+.qz-attachments-popup { position: fixed; inset: auto; width: min(360px, calc(100vw - 24px)); margin: 0; padding: 0; border: 1px solid var(--rule); border-radius: 12px; background: var(--sheet); color: var(--ink); box-shadow: var(--shadow-card); overflow-y: auto; }
+.qz-attachments-popup::backdrop { background: transparent; pointer-events: none; }
+.qz-attachments-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px 8px 16px; }
+.qz-attachments-header h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.qz-attachments-body { padding: 0 8px 8px; font-size: 13px; color: var(--ink-2); }
+.qz-attachments-body ul { list-style: none; margin: 0; padding: 0; }
+.qz-attachments-body p { margin: 8px; line-height: 1.5; }
+.qz-attachment-file { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 8px; border-radius: 7px; color: var(--ink); text-align: left; }
+.qz-attachment-file:hover:not(:disabled) { background: var(--sheet-2); }
+.qz-attachment-file > svg { flex-shrink: 0; }
+.qz-attachment-file > span { flex: 1; min-width: 0; }
+.qz-attachment-file strong { display: block; overflow-wrap: anywhere; font-size: 13px; font-weight: 500; }
+.qz-attachment-file small { display: block; margin-top: 4px; font-size: 11px; color: var(--ink-2); }
+.qz-attachment-file:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Static, subdued generation status, anchored outside the changing question content. */
+.qz-shell { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.qz-generation { position: absolute; bottom: 10px; left: 18px; z-index: 4; font-size: 11px; cursor: help; animation: none; transition: none; }
+.qz-generation-label { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); opacity: .6; }
+.qz-generation-dot { width: 5px; height: 5px; background: currentColor; border-radius: 50%; }
+.qz-generation-details { display: none; position: absolute; bottom: 24px; left: 0; width: min(280px,calc(100vw - 48px)); padding: 12px; border: 1px solid var(--rule); border-radius: 9px; color: var(--ink-2); background: var(--sheet); box-shadow: var(--shadow-card); font-size: 12px; line-height: 1.5; }
+.qz-generation[data-details="true"] .qz-generation-details, .qz-generation:hover .qz-generation-details, .qz-generation:focus .qz-generation-details { display: block; }
+.qz-generation:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.qz-count { border-radius: 4px; cursor: text; }
+.qz-count:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.qz-count-editor { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; }
+.qz-count-editor label { display: inline-flex; align-items: center; gap: 6px; }
+.qz-count-editor input { width: 64px; padding: 4px 6px; color: var(--ink); background: var(--sheet-2); border: 1px solid var(--rule); border-radius: 5px; font: inherit; }
+.qz-count-editor button { display: grid; place-items: center; padding: 4px; color: var(--ink-2); }
+.qz-count-editor [role=alert] { flex-basis: 100%; max-width: 320px; color: var(--danger); }
+.qz-progress > .is-ready { background: color-mix(in srgb,var(--ink-3) 65%,var(--sheet)); }
+.qz-progress > .is-unready { background: color-mix(in srgb,var(--ink-3) 20%,var(--sheet)); }

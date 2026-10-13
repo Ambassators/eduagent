@@ -52,12 +52,6 @@
 .tex-custom-list > div { display: flex; align-items: center; gap: 6px; }
 .tex-custom-list span { flex: 1; overflow-wrap: anywhere; }
 @media (max-width: 1200px) { .glasstex-view .doc-actions { gap: 3px; } .glasstex-view .doc-actions button { font-size: 10px; padding: 5px; } .tex-save-status { display: none; } }
-@media (max-width: 1280px) {
-  .workspace.with-presentation.with-tex-document { grid-template-columns: var(--left-w, 224px) minmax(340px, 1fr) var(--present-w, minmax(300px, 1fr)); }
-  .workspace.with-presentation.with-tex-document .rail-left { display: flex; }
-  .workspace.with-presentation.with-tex-document .rail-right { display: none; }
-  .platform-darwin .workspace.with-presentation.with-tex-document .stage:not(.stage-presentation) .doc-toolbar { padding-left: 18px; }
-}
 @container (max-width: 560px) {
   .glasstex-view .doc-toolbar { height: auto; min-height: 44px; flex-wrap: wrap; gap: 5px; padding-top: 6px; padding-bottom: 6px; }
   .glasstex-view .doc-title { width: 100%; }

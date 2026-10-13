@@ -33,11 +33,11 @@ app.whenReady().then(async () => {
   await store.open([file]);
   const handlers = {
     windowActivity: () => windowIsActive(win),
-    status: async () => ({ connected: false, account: null, models: [], voices: [], voiceAvailable: false, settings: { ...defaultSettings, transparency: 'opaque', ...await readFile(path.join(temporary, 'settings.json'), 'utf8').then(JSON.parse).catch(() => ({})) }, executable: '', platform: process.platform, darkMode: false }),
+    status: async () => ({ connected: false, account: null, models: [], voices: [], voiceAvailable: false, settings: { ...defaultSettings, transparency: 'opaque', lowPowerMode: false, ...await readFile(path.join(temporary, 'settings.json'), 'utf8').then(JSON.parse).catch(() => ({})) }, executable: '', platform: process.platform, darkMode: false }),
     settings: async settings => { await writeFile(path.join(temporary, 'settings.json'), JSON.stringify(settings)); return settings; },
     stop: () => {}, interrupt: () => {},
     workspace: state, document: id => store.content(id), documentBytes: id => store.bytes(id),
-    syncTranscript: () => {}, present: () => {}, browserState: () => ({ tabs: [], activeId: null, clients: [] })
+    syncTranscript: () => {}, present: (id, placement) => { const presentation=state().artifacts.find(item=>item.id===id); win.webContents.send('voice:event', { method: 'workspace/presentation', params: { presentation: { ...presentation, placement } } }); }, browserState: () => ({ tabs: [], activeId: null, clients: [] })
   };
   for (const [name, fn] of Object.entries(handlers)) ipcMain.handle('voice:' + name, (_event, ...args) => fn(...args));
   protocol.handle('codex-glasstex', glassTeXResponse(path.join(root, 'dist/renderer/glasstex')));
@@ -47,6 +47,7 @@ app.whenReady().then(async () => {
   await win.loadFile(path.join(root, 'dist/renderer/index.html'));
   const ui = code => win.webContents.executeJavaScript(code);
   await waitFor(() => ui(`document.documentElement.dataset.renderActive === 'false' && !!document.querySelector('.tex-frame') && !document.querySelector('.tex-loading')`), 'initially hidden window pauses rendering');
+  assert.deepEqual(await ui(`Array.from(document.querySelectorAll('.rail'),rail=>({opacity:getComputedStyle(rail).opacity,animation:getComputedStyle(rail).animationName}))`), [{opacity:'1',animation:'none'},{opacity:'1',animation:'none'}], 'sidebar controls are immediately visible before native focus');
   const child = win.webContents.mainFrame.frames.find(frame => frame.url.startsWith('codex-glasstex:'));
   assert.ok(child);
   const editor = code => child.executeJavaScript(code);
@@ -166,5 +167,5 @@ app.whenReady().then(async () => {
   await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
   win.webContents.debugger.detach();
   console.log('Rendering smoke passed: light fluid orb, saved video mode, actual decoding, pause/resume, reduced motion, native focus/visibility, editor caret, demos');
-  clearTimeout(timeout); win.destroy(); await rm(temporary, { recursive: true, force: true }); app.exit(0);
-}).catch(async error => { console.error(error); clearTimeout(timeout); win?.destroy(); if (temporary) await rm(temporary, { recursive: true, force: true }); app.exit(1); });
+  clearTimeout(timeout); win.destroy(); await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); app.exit(0);
+}).catch(async error => { console.error(error); clearTimeout(timeout); win?.destroy(); try { await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } finally { app.exit(1); } });

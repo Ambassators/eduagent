@@ -55,7 +55,7 @@ const api: DesktopAPI = {
   exportTeXPDF: (id,settings) => ipcRenderer.invoke('voice:exportTeXPDF', id, settings),
   setPage: (id,page) => ipcRenderer.invoke('voice:page', id, page),
   pointer: text => ipcRenderer.invoke('voice:pointer', text),
-  syncTranscript: entries => ipcRenderer.invoke('voice:syncTranscript', entries),
+  syncTranscript: (entries,routeSpokenQuiz) => ipcRenderer.invoke('voice:syncTranscript', entries, routeSpokenQuiz===true),
   think: message => ipcRenderer.invoke('voice:think', message),
   cancelThink: () => ipcRenderer.invoke('voice:cancelThink'),
   compact: () => ipcRenderer.invoke('voice:compact'),
@@ -67,8 +67,9 @@ const api: DesktopAPI = {
   dismissPDFAnnotation: id => ipcRenderer.invoke('voice:dismissPDFAnnotation',id),
   answerQuiz: input => ipcRenderer.invoke('voice:answerQuiz',input),
   setQuizAdaptive: enabled => ipcRenderer.invoke('voice:setQuizAdaptive',enabled),
+  setQuizMaxQuestions: count => ipcRenderer.invoke('voice:setQuizMaxQuestions',count),
+  setQuizMode: mode => ipcRenderer.invoke('voice:setQuizMode',mode),
   closeQuiz: () => ipcRenderer.invoke('voice:closeQuiz'),
-  skipQuizFollowUp: () => ipcRenderer.invoke('voice:skipQuizFollowUp'),
   openQuizSource: source => ipcRenderer.invoke('voice:openQuizSource',source),
   onEvent: (handler) => {
     const listener = (_event: Electron.IpcRendererEvent, data: AppEvent) => handler(data);

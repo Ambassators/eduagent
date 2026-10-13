@@ -1,7 +1,7 @@
 import BrowserPanel from './BrowserPanel';
 import type { BrowserState } from '../browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { defaultSettings, type AppEvent, type DesktopAPI, type DocumentInfo, type Settings, type Status, type TranscriptEntry, type WorkspaceState, type ToolActivity, type PDFToolRequest, type DebugLog, type SavedChat, type ChatSummary } from '../shared';
+import { defaultSettings, type AppEvent, type DesktopAPI, type DocumentInfo, type DocumentSource, type Settings, type Status, type TranscriptEntry, type WorkspaceState, type ToolActivity, type PDFToolRequest, type DebugLog, type SavedChat, type ChatSummary } from '../shared';
 import { VoiceSession, type LiveEvent } from './voice';
 import { CaptionGroups, EchoFilter } from './voice-input';
 import { pointerContext } from './pointer-context';
@@ -10,7 +10,8 @@ import GlassTeXEditor from './GlassTeXEditor';
 import { flushTeX } from './tex-persistence';
 import Icon from './Icon';
 import { Orb, VoiceGlyph, type OrbTone } from './Orb';
-import QuizPanel from './QuizPanel';
+import QuizDocument from './QuizDocument';
+import FloatingCard from './FloatingCard';
 import { ThinkOrb, type ThinkJob } from './ThinkOrb';
 import { executePDFViewTool } from './pdf-view-tools';
 import ResizeHandle, { readPaneSizes, writePaneSizes, type PaneSizes } from './ResizeHandle';
@@ -43,6 +44,7 @@ export default function App() {
   const [browserVisible,setBrowserVisible]=useState(false);
   const browserCount=useRef(0);
   const [workspace,setWorkspace]=useState<WorkspaceState|null>(null);
+  const [sourceTarget,setSourceTarget]=useState<DocumentSource|null>(null);
   const [texSidebar,setTeXSidebar]=useState<HTMLDivElement|null>(null);
   const workspaceRef=useRef(workspace);workspaceRef.current=workspace;
   const [pointerVisible,setPointerVisible]=useState(false);
@@ -100,6 +102,15 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [draft, setDraft] = useState<Settings>({ ...defaultSettings });
   const [saving, setSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
+  const settingsOpenRef = useRef(false);
+  const settingsErrorRef = useRef('');
+  const settingsCommitted = useRef<Settings>({ ...defaultSettings });
+  const settingsStart = useRef<Settings>({ ...defaultSettings });
+  const settingsDraft = useRef<Settings>({ ...defaultSettings });
+  const settingsQueue = useRef<Promise<void>>(Promise.resolve());
+  const settingsRevision = useRef(0);
+  const pendingSettings = useRef(0);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [backendBusy, setBackendBusy] = useState(false);
   const typedPending = useRef(false);
@@ -125,7 +136,7 @@ export default function App() {
   }, [changePhase, showLevel]);
   const refresh = useCallback(async (quiet = false) => {
     setLoading(true); if (!quiet) setError('');
-    try { const [next,files] = await Promise.all([api().status(),api().workspace()]); setStatus(next); setDraft(next.settings);setWorkspace(files);setBrowserState(await api().browserState()); }
+    try { const [next,files] = await Promise.all([api().status(),api().workspace()]); setStatus(next); settingsCommitted.current = next.settings; if (!settingsOpenRef.current && !pendingSettings.current) { settingsDraft.current = next.settings; setDraft(next.settings); } setWorkspace(files);setBrowserState(await api().browserState()); }
     catch (e) { if (!quiet) setError(errorMessage(e)); }
     finally { setLoading(false); }
   }, []);
@@ -211,7 +222,8 @@ export default function App() {
     catch(e){setError(errorMessage(e));}
     finally{typedPending.current=false;setBackendBusy(false);}
   }, []);
-  useEffect(()=>{const timer=setTimeout(()=>{void api().syncTranscript(entries).catch(e=>setError(errorMessage(e)));},180);return()=>clearTimeout(timer);},[entries]);
+  useEffect(()=>{const report=(event:Event)=>setError((event as CustomEvent<string>).detail);window.addEventListener('document-link-error',report);return()=>window.removeEventListener('document-link-error',report);},[]);
+  useEffect(()=>{const timer=setTimeout(()=>{void api().syncTranscript(entries,sessionOn).catch(e=>setError(errorMessage(e)));},180);return()=>clearTimeout(timer);},[entries,sessionOn]);
   const saveChat=useCallback(async()=>{
     const entries=entriesRef.current,think=thinkMessagesRef.current;
     if(!entries.length&&!think.length)return;
@@ -229,6 +241,7 @@ export default function App() {
         case 'browser/state': { const state=p.state as unknown as BrowserState;setBrowserState(state);if(state.tabs.length>browserCount.current)void flushTeX().then(()=>setBrowserVisible(true)).catch(e=>setError(errorMessage(e)));browserCount.current=state.tabs.length;break; }
         case 'workspace/changed':setWorkspace(p.workspace as unknown as WorkspaceState);break;
         case 'workspace/annotations':setWorkspace(old=>old?{...old,annotations:p.annotations as unknown as WorkspaceState['annotations']}:old);break;
+        case 'document/source':setSourceTarget(p.source as unknown as DocumentSource);setBrowserVisible(false);break;
         case 'quiz/state':setWorkspace(old=>old?{...old,quiz:p.state as unknown as WorkspaceState['quiz']}:old);break;
         case 'pdf/tool': {
           const request=p.request as unknown as PDFToolRequest;
@@ -251,7 +264,8 @@ export default function App() {
         case 'workspace/presentation': {
           const presentation=p.presentation as unknown as NonNullable<WorkspaceState['artifacts']>[number];
           setWorkspace(old=>old?{...old,artifacts:[...old.artifacts.filter(item=>item.id!==presentation.id),presentation]}:old);
-          if(presentation.placement==='side')setPresentationId(presentation.id);break;
+          if(presentation.placement==='side')setPresentationId(presentation.id);
+          else setPresentationId(old=>old===presentation.id?null:old);break;
         }
         case 'appearance/changed':setStatus(old=>old?{...old,darkMode:Boolean(p.darkMode)}:old);break;
         case 'think/state':{const state=p.state as {busy?:boolean;delegating?:boolean;queued?:number};backendWorking.current=!!(state.busy||state.delegating||state.queued);}setWorkspace(old=>old?{...old,thinking:p.state as unknown as WorkspaceState['thinking']}:old);break;
@@ -357,10 +371,41 @@ export default function App() {
     };
     window.addEventListener('keydown', handler); return () => window.removeEventListener('keydown', handler);
   }, [settingsOpen, historyOpen, status, startSession, endSession, newChat, changePhase]);
-  async function saveSettings() {
-    setSaving(true); setError('');
-    try { await endSession(); await api().saveSettings(draft); setSettingsOpen(false); await refresh(); }
-    catch (e) { setError(errorMessage(e)); } finally { setSaving(false); }
+  function persistSettings(next: Settings) {
+    const revision = ++settingsRevision.current;
+    pendingSettings.current += 1;
+    setSaving(true); settingsErrorRef.current=''; setSettingsError('');
+    // Full settings snapshots must reach the backend in order, including Undo.
+    settingsQueue.current = settingsQueue.current.then(async () => {
+      try {
+        await endSession();
+        const saved = await api().saveSettings(next);
+        const executableChanged = saved.codexPath !== settingsCommitted.current.codexPath;
+        settingsCommitted.current = saved;
+        setStatus(old => old ? { ...old, settings: saved } : old);
+        if (executableChanged) setStatus(await api().status());
+        if (revision === settingsRevision.current) {
+          settingsDraft.current = saved; setDraft(saved); setSettingsError('');
+        }
+      } catch (e) {
+        if (revision === settingsRevision.current) { settingsErrorRef.current=errorMessage(e); setSettingsError(settingsErrorRef.current); }
+      } finally {
+        pendingSettings.current -= 1;
+        if (!pendingSettings.current) setSaving(false);
+      }
+    });
+  }
+  function updateSettings(patch: Partial<Settings>, save = true) {
+    const next = { ...settingsDraft.current, ...patch };
+    settingsRevision.current += 1;
+    settingsDraft.current = next; setDraft(next);
+    if (save) persistSettings(next);
+  }
+  async function closeSettings() {
+    if (JSON.stringify(settingsDraft.current)!==JSON.stringify(settingsCommitted.current)) persistSettings(settingsDraft.current);
+    await settingsQueue.current;
+    if (settingsErrorRef.current) return;
+    settingsOpenRef.current = false; setSettingsOpen(false);
   }
   const signedIn = status?.account?.type === 'chatgpt' && status.connected;
   const offline = !status?.connected;
@@ -379,7 +424,6 @@ export default function App() {
   const buttonLabel = sessionOn ? 'End voice (Esc)' : 'Start a conversation';
   const activeFile=workspace?.files.find(file=>file.id===workspace.activeId);
   const presentation=workspace?.artifacts.find(item=>item.id===presentationId);
-  const quizOpen=!!workspace?.quiz.quiz;
   const thinking=workspace?.thinking;
   const lastThink=thinkMessages[thinkMessages.length-1];
   const thinkPreview=lastThink?.role==='assistant'&&!lastThink.final?lastThink.text:'';
@@ -395,7 +439,7 @@ export default function App() {
   const hasMessages=entries.length>0||thinkMessages.length>0;
   const platform=status?.platform??(navigator.userAgent.includes('Mac')?'darwin':'win32');
   const mod=platform==='darwin'?'⌘':'Ctrl ';
-  const openSettings=()=>{setDraft(status?.settings??defaultSettings);setSettingsOpen(true);};
+  const openSettings=()=>{const initial={...(status?.settings??defaultSettings)};settingsStart.current=initial;settingsDraft.current=initial;setDraft(initial);settingsErrorRef.current='';setSettingsError('');settingsOpenRef.current=true;setSettingsOpen(true);};
   const selectFile=(id:string)=>void flushTeX().then(()=>{setBrowserVisible(false);return api().selectFile(id);}).then(setWorkspace).catch(e=>setError(errorMessage(e)));
   const closeFile=(id:string)=>void flushTeX(id).then(()=>api().closeFile(id)).then(setWorkspace).catch(e=>setError(errorMessage(e)));
   const fileMeta=(file:DocumentInfo)=>file.dirty?'Edited copy':file.pageCount?`${file.pageCount} ${file.pageCount===1?'page':'pages'}`:file.kind==='binary'?`${Math.max(1,Math.round(file.size/1024))} KB`:file.kind;
@@ -403,7 +447,7 @@ export default function App() {
   const tone:OrbTone=!sessionOn||phase==='standby'?'idle':phase==='starting'?'connecting':phase==='speaking'?'speaking':phase==='thinking'?'capturing':'on';
   const materials:[Settings['transparency'],string][]=platform==='win32'?[['acrylic','Acrylic'],['mica','Mica'],['opaque','Opaque']]:[['acrylic','Glass'],['opaque','Opaque']];
   return <LowPowerContext.Provider value={status?.settings.lowPowerMode ?? false}><div className={`studio ${status?.darkMode?'dark':'light'} ${status?.settings.transparency??'acrylic'} platform-${platform}`} onDragOver={event=>{event.preventDefault();if(event.dataTransfer.types.includes('Files'))setDropActive(true);}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node))setDropActive(false);}} onDrop={event=>void dropFiles(event)}>
-    <div className={`workspace ${presentation||quizOpen?'with-presentation':''} ${!browserVisible&&activeFile?.kind==='tex'?'with-tex-document':''}`} style={{'--left-w':px(paneSizes.left),'--right-w':px(paneSizes.right),'--present-w':px(paneSizes.present),'--tex-h':px(paneSizes.tex)} as React.CSSProperties}>
+    <div className={`workspace ${!browserVisible&&activeFile?.kind==='tex'?'with-tex-document':''}`} style={{'--left-w':px(paneSizes.left),'--right-w':px(paneSizes.right),'--tex-h':px(paneSizes.tex)} as React.CSSProperties}>
       <aside className="rail rail-left">
         <ResizeHandle edge="right" min={200} shrinks=".document-column" keep={340} label="Resize sidebar" onResize={resizePane('left')}/>
         <div className="rail-top drag"/>
@@ -430,7 +474,7 @@ export default function App() {
         </div>
         {!!workspace?.artifacts.length&&<div className="rail-section artifacts">
           <div className="section-label"><span>On screen</span><span>{workspace.artifacts.length}</span></div>
-          <div className="artifact-list">{workspace.artifacts.map(item=><button key={item.id} className={presentationId===item.id?'active':''} onClick={()=>{setPresentationId(item.id);void api().present(item.id,'side').catch(e=>setError(errorMessage(e)));}}><span className="artifact-icon"><Icon name={item.kind==='demo'?'panel':'file'} size={14}/></span><span>{item.title}</span></button>)}</div>
+          <div className="artifact-list">{workspace.artifacts.map(item=><button key={item.id} className={presentationId===item.id?'active':''} onClick={()=>{void api().present(item.id,item.placement).catch(e=>setError(errorMessage(e)));}}><span className="artifact-icon"><Icon name={item.kind==='demo'?'panel':'file'} size={14}/></span><span>{item.title}</span></button>)}</div>
         </div>}
         <div className="rail-bottom">
           <button className="rail-action" onClick={()=>void newChat()}><Icon name="plus" size={15}/>New conversation</button>
@@ -446,7 +490,7 @@ export default function App() {
       <main className="stage document-column">
         {!browserVisible&&!activeFile&&<div className="stage-top drag" aria-hidden="true"/>}
         <div className="sheet">
-          {browserVisible?<BrowserPanel state={browserState} blocked={settingsOpen||dropActive||!!error||!!notice||!!status?.warning} onError={setError}/>:activeFile?activeFile.kind==='tex'?<GlassTeXEditor key={activeFile.id} file={activeFile} sidebar={texSidebar} onError={setError} onOpenFiles={()=>void openFiles()}/>:<DocumentViewer key={activeFile.id} file={activeFile} onError={setError} annotations={workspace!.annotations} voice={{tone,label:buttonLabel,disabled:!sessionOn&&(!signedIn||!status?.voiceAvailable||loading),onClick:()=>void primary().catch(e=>setError(errorMessage(e))),onVisible:setPointerVisible}}/>:<div className="welcome">
+          {browserVisible?<BrowserPanel state={browserState} blocked={settingsOpen||dropActive||!!presentation||!!error||!!notice||!!status?.warning} onError={setError}/>:activeFile?activeFile.kind==='quiz'?<QuizDocument file={activeFile} state={workspace!.quiz} onClose={()=>closeFile(activeFile.id)} onError={setError}/>:activeFile.kind==='tex'?<GlassTeXEditor key={activeFile.id} file={activeFile} sourceTarget={sourceTarget} sidebar={texSidebar} onError={setError} onOpenFiles={()=>void openFiles()}/>:<DocumentViewer key={activeFile.id} file={activeFile} source={sourceTarget} onError={setError} annotations={workspace!.annotations} voice={{tone,label:buttonLabel,disabled:!sessionOn&&(!signedIn||!status?.voiceAvailable||loading),onClick:()=>void primary().catch(e=>setError(errorMessage(e))),onVisible:setPointerVisible}}/>:<div className="welcome">
             <div className="welcome-inner">
               <h1>Open something.<br/><mark>Talk it through.</mark></h1>
               <div className="welcome-actions"><button className="button-primary" onClick={()=>void openFiles()} disabled={opening}><Icon name="folder" size={16}/>Open a file</button></div>
@@ -456,19 +500,14 @@ export default function App() {
         </div>
       </main>
 
-      {(presentation||quizOpen)&&<section className="stage stage-presentation">
-        <ResizeHandle edge="left" min={280} shrinks=".document-column" keep={340} label="Resize side view" onResize={resizePane('present')}/>
-        <div className="stage-top drag"><span className="section-label"><span>{presentation?presentation.kind==='demo'?'Interactive demonstration':'On screen':'Practice'}</span></span></div>
-        {presentation&&<div className="sheet presentation-sheet">
-          <div className="presentation-heading"><h2 title={presentation.title}>{presentation.title}</h2><div>
+      {presentation&&<FloatingCard key={presentation.id} kind="presentation" title={presentation.title} actions={<>
             <button className="icon-button" title="Open in a popup" onClick={()=>void api().present(presentation.id,'popup').catch(e=>setError(errorMessage(e)))}><Icon name="popout" size={15}/></button>
             <button className="icon-button" title="Save presentation" onClick={()=>void api().savePresentation(presentation.id).catch(e=>setError(errorMessage(e)))}><Icon name="download" size={15}/></button>
-            <button className="icon-button" title="Close side view" onClick={()=>setPresentationId(null)}><Icon name="close" size={15}/></button>
-          </div></div>
+            <button className="icon-button" title="Close floating card" aria-label="Close floating card" onClick={()=>setPresentationId(null)}><Icon name="close" size={15}/></button>
+          </>}>
           {presentation.kind==='demo'?<iframe title={presentation.title} sandbox="allow-scripts" src={`codex-presentation://${presentation.id}/`}/>:<div className="presentation-text"><MarkdownView text={presentation.content}/></div>}
-        </div>}
-        {quizOpen&&<div className={`quiz-side ${presentation?'with-presentation':''}`}><QuizPanel state={workspace!.quiz} onAnswer={input=>api().answerQuiz(input)} onToggleAdaptive={enabled=>api().setQuizAdaptive(enabled)} onClose={()=>api().closeQuiz()} onSkipFollowUp={()=>api().skipQuizFollowUp()} onOpenSource={source=>api().openQuizSource(source)}/></div>}
-      </section>}
+      </FloatingCard>}
+
 
       <section className="rail rail-right">
         <ResizeHandle edge="left" min={280} shrinks=".document-column" keep={340} label="Resize assistant panel" onResize={resizePane('right')}/>
@@ -536,52 +575,60 @@ export default function App() {
       </div>}
     </dialog>
 
-    <dialog ref={dialogRef} className="settings-dialog" onCancel={()=>setSettingsOpen(false)}>
-      <header className="dialog-header"><h2>Preferences</h2><button className="icon-button" title="Close preferences" onClick={()=>setSettingsOpen(false)}><Icon name="close" size={18}/></button></header>
+    <dialog ref={dialogRef} className="settings-dialog" onCancel={event=>{event.preventDefault();void closeSettings();}}>
+      <header className="dialog-header"><h2>Preferences</h2><button className="icon-button" title="Close preferences" onClick={()=>void closeSettings()}><Icon name="close" size={18}/></button></header>
       <section className="settings-section"><h3>Window</h3>
         <div className="material-picker" role="radiogroup" aria-label="Window background">{materials.map(([value,label])=><label key={value} className={`material-option ${draft.transparency===value?'selected':''}`}>
-          <input type="radio" className="visually-hidden" name="material" value={value} checked={draft.transparency===value} onChange={()=>setDraft({...draft,transparency:value})}/>
+          <input type="radio" className="visually-hidden" name="material" value={value} checked={draft.transparency===value} onChange={()=>updateSettings({transparency:value})}/>
           <span className={`material-swatch ${value}`}><i/><b/><i/></span><strong>{label}</strong>
         </label>)}</div>
         <div className="settings-grid">
-          <div className="field"><span>Appearance</span><div className="segmented" role="radiogroup" aria-label="Appearance">{([['system','System'],['light','Light'],['dark','Dark']] as const).map(([value,label])=><button type="button" role="radio" aria-checked={draft.theme===value} key={value} onClick={()=>setDraft({...draft,theme:value})}>{label}</button>)}</div></div>
-          <label className="field"><span>Demonstrations</span><select value={draft.demoPlacement} onChange={event=>setDraft({...draft,demoPlacement:event.target.value as Settings['demoPlacement']})}><option value="side">Side view by default</option><option value="popup">Popup by default</option></select></label>
+          <div className="field"><span>Appearance</span><div className="segmented" role="radiogroup" aria-label="Appearance">{([['system','System'],['light','Light'],['dark','Dark']] as const).map(([value,label])=><button type="button" role="radio" aria-checked={draft.theme===value} key={value} onClick={()=>updateSettings({theme:value})}>{label}</button>)}</div></div>
+          <label className="field"><span>Demonstrations</span><select value={draft.demoPlacement} onChange={event=>updateSettings({demoPlacement:event.target.value as Settings['demoPlacement']})}><option value="side">Floating card by default</option><option value="popup">Separate window by default</option></select></label>
         </div>
-        <label className="check-setting voice-tools-setting"><input type="checkbox" name="lowPowerMode" checked={draft.lowPowerMode ?? false} onChange={event=>setDraft({...draft,lowPowerMode:event.target.checked})}/><span>Low power mode<small>Use gentler orb playback to save power. Animation pauses when the app is unfocused.</small></span></label>
+        <label className="check-setting voice-tools-setting"><input type="checkbox" name="lowPowerMode" checked={draft.lowPowerMode ?? false} onChange={event=>updateSettings({lowPowerMode:event.target.checked})}/><span>Low power mode<small>Use gentler orb playback to save power. Animation pauses when the app is unfocused.</small></span></label>
       </section>
       <section className="settings-section"><h3>Think</h3>
+        <h4>Answer generator</h4>
         <div className="settings-grid">
-          <label className="field"><span>Backend model</span><select value={draft.model} onChange={event=>setDraft({...draft,model:event.target.value})}><option value="">Codex default</option>{draft.model&&!status?.models.some(model=>model.model===draft.model)&&<option value={draft.model}>{draft.model==='gpt-6.1-sol'?'GPT-6.1 Sol':draft.model}</option>}{status?.models.map(model=><option key={model.model} value={model.model}>{model.displayName}</option>)}</select></label>
-          <label className="field"><span>Thinking effort</span><select value={draft.reasoningEffort} onChange={event=>setDraft({...draft,reasoningEffort:event.target.value as Settings['reasoningEffort']})}>{['low','medium','high','xhigh'].map(effort=><option key={effort} value={effort}>{effort==='xhigh'?'Extra high':effort.charAt(0).toUpperCase()+effort.slice(1)}</option>)}</select></label>
-          <label className="field"><span>Compact context at</span><input type="number" min={8000} max={200000} step={4000} value={draft.compactAtTokens} onChange={event=>setDraft({...draft,compactAtTokens:Number(event.target.value)})}/></label>
-          <label className="check-setting"><input type="checkbox" checked={draft.autoCompact} onChange={event=>setDraft({...draft,autoCompact:event.target.checked})}/><span>Auto compact</span></label>
-          <label className="check-setting"><input type="checkbox" checked={draft.priority} onChange={event=>setDraft({...draft,priority:event.target.checked})}/><span>Fast / Priority</span></label>
+          <label className="field"><span>Model</span><select name="answerModel" value={draft.model} onChange={event=>updateSettings({model:event.target.value})}><option value="">Codex default</option>{draft.model&&!status?.models.some(model=>model.model===draft.model)&&<option value={draft.model}>{draft.model==='gpt-6.1-sol'?'GPT-6.1 Sol':draft.model}</option>}{status?.models.map(model=><option key={model.model} value={model.model}>{model.displayName}</option>)}</select></label>
+          <label className="field"><span>Thinking effort</span><select name="answerEffort" value={draft.reasoningEffort} onChange={event=>updateSettings({reasoningEffort:event.target.value as Settings['reasoningEffort']})}>{['low','medium','high','xhigh'].map(effort=><option key={effort} value={effort}>{effort==='xhigh'?'Extra high':effort.charAt(0).toUpperCase()+effort.slice(1)}</option>)}</select></label>
         </div>
-        <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.quizFollowUps} onChange={event=>setDraft({...draft,quizFollowUps:event.target.checked})}/><span>Quiz follow-ups<small>After every answer, add a follow-up question: simpler after a miss, harder after a correct answer.</small></span></label>
-        <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.proactiveExplain} onChange={event=>setDraft({...draft,proactiveExplain:event.target.checked})}/><span>Show answers on the page<small>When you ask about a PDF, the answer is highlighted automatically, with an explanation or interactive beside it when that helps.</small></span></label>
+        <h4>Quiz generator</h4>
+        <div className="settings-grid">
+          <label className="field"><span>Model</span><select name="quizModel" value={draft.quizModel} onChange={event=>updateSettings({quizModel:event.target.value})}><option value="">Codex default</option>{draft.quizModel&&!status?.models.some(model=>model.model===draft.quizModel)&&<option value={draft.quizModel}>{draft.quizModel==='gpt-6.1-sol'?'GPT-6.1 Sol':draft.quizModel}</option>}{status?.models.map(model=><option key={model.model} value={model.model}>{model.displayName}</option>)}</select></label>
+          <label className="field"><span>Thinking effort</span><select name="quizEffort" value={draft.quizReasoningEffort} onChange={event=>updateSettings({quizReasoningEffort:event.target.value as Settings['reasoningEffort']})}>{['low','medium','high','xhigh'].map(effort=><option key={effort} value={effort}>{effort==='xhigh'?'Extra high':effort.charAt(0).toUpperCase()+effort.slice(1)}</option>)}</select></label>
+        </div>
+        <h4>Context and speed</h4>
+        <div className="settings-grid">
+          <label className="field"><span>Compact context at</span><input type="number" min={8000} max={200000} step={4000} value={draft.compactAtTokens} onChange={event=>updateSettings({compactAtTokens:Number(event.target.value)},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
+          <label className="check-setting"><input type="checkbox" checked={draft.autoCompact} onChange={event=>updateSettings({autoCompact:event.target.checked})}/><span>Auto compact</span></label>
+          <label className="check-setting"><input type="checkbox" checked={draft.priority} onChange={event=>updateSettings({priority:event.target.checked})}/><span>Fast / Priority</span></label>
+        </div>
+        <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.proactiveExplain} onChange={event=>updateSettings({proactiveExplain:event.target.checked})}/><span>Show answers on the page<small>When you ask about a PDF, the answer is highlighted automatically, with an explanation or interactive beside it when that helps.</small></span></label>
       </section>
       <section className="settings-section"><h3>Voice</h3>
         <div className="settings-grid">
-          <label className="field"><span>Voice</span><select value={draft.voice} onChange={event=>setDraft({...draft,voice:event.target.value})}><option value="">Service default</option>{status?.voices.map(voice=><option key={voice.id} value={voice.id}>{voice.name}</option>)}</select></label>
-          <label className="field"><span>Microphone</span><select value={draft.inputDevice} onChange={event=>setDraft({...draft,inputDevice:event.target.value})}><option value="">System default</option>{devices.filter(device=>device.deviceId&&device.deviceId!=='default').map(device=><option key={device.deviceId} value={device.deviceId}>{device.label||'Microphone'}</option>)}</select></label>
+          <label className="field"><span>Voice</span><select value={draft.voice} onChange={event=>updateSettings({voice:event.target.value})}><option value="">Service default</option>{status?.voices.map(voice=><option key={voice.id} value={voice.id}>{voice.name}</option>)}</select></label>
+          <label className="field"><span>Microphone</span><select value={draft.inputDevice} onChange={event=>updateSettings({inputDevice:event.target.value})}><option value="">System default</option>{devices.filter(device=>device.deviceId&&device.deviceId!=='default').map(device=><option key={device.deviceId} value={device.deviceId}>{device.label||'Microphone'}</option>)}</select></label>
         </div>
-        <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.agentTools} onChange={event=>setDraft({...draft,agentTools:event.target.checked})}/><span>Voice agent tools<small>Voice highlights, points, and reads quiz progress directly. Think still writes quizzes, explanations, and edits.</small></span></label>
-        <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.bridgeResearch} onChange={event=>setDraft({...draft,bridgeResearch:event.target.checked})}/><span>Voice research<small>Voice can read open files and search the web for quick answers. Bigger work still goes to Think.</small></span></label>
+        <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.agentTools} onChange={event=>updateSettings({agentTools:event.target.checked})}/><span>Voice agent tools<small>Voice highlights, points, and reads quiz progress directly. Think still writes quizzes, explanations, and edits.</small></span></label>
+        <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.bridgeResearch} onChange={event=>updateSettings({bridgeResearch:event.target.checked})}/><span>Voice research<small>Voice can read open files and search the web for quick answers. Bigger work still goes to Think.</small></span></label>
         <h4>Usage saving (experimental)</h4>
         <div className="settings-grid">
-          <label className="field" title="Closes the live voice connection after this much quiet to save usage; talking reconnects it. 0 keeps it open."><span>Standby after (seconds, 0 = never)</span><input type="number" min={0} max={600} step={15} value={draft.standbyAfterSeconds} onChange={event=>setDraft({...draft,standbyAfterSeconds:Number(event.target.value)})}/></label>
-          <label className="field" title="How what you said while it reconnected reaches the voice. Real time adds the reconnect time to the first reply. Faster replays at 1.3× (slightly higher pitch) until caught up. Burst sends it all at once through an experimental Codex call and falls back to real time if that fails."><span>Catch-up after standby</span><select value={draft.voiceCatchUp} onChange={event=>setDraft({...draft,voiceCatchUp:event.target.value as Settings['voiceCatchUp']})}><option value="realtime">Replay in real time</option><option value="fast">Replay faster (1.3×)</option><option value="burst">Send as burst (experimental)</option></select></label>
-          <label className="field" title="How much speech it needs to hear before waking from standby. Higher ignores coughs and short noises."><span>Wake after speech of (ms)</span><input type="number" min={100} max={2000} step={50} value={draft.standbyWakeMs} onChange={event=>setDraft({...draft,standbyWakeMs:Number(event.target.value)})}/></label>
-          <label className="field" title="If a wake hears no words within this time, it goes back to standby. 0 turns it off."><span>Re-sleep on false wake (seconds, 0 = off)</span><input type="number" min={0} max={120} step={5} value={draft.standbyFalseWakeSeconds} onChange={event=>setDraft({...draft,standbyFalseWakeSeconds:Number(event.target.value)})}/></label>
+          <label className="field" title="Closes the live voice connection after this much quiet to save usage; talking reconnects it. 0 keeps it open."><span>Standby after (seconds, 0 = never)</span><input type="number" min={0} max={600} step={15} value={draft.standbyAfterSeconds} onChange={event=>updateSettings({standbyAfterSeconds:Number(event.target.value)},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
+          <label className="field" title="How what you said while it reconnected reaches the voice. Real time adds the reconnect time to the first reply. Faster replays at 1.3× (slightly higher pitch) until caught up. Burst sends it all at once through an experimental Codex call and falls back to real time if that fails."><span>Catch-up after standby</span><select value={draft.voiceCatchUp} onChange={event=>updateSettings({voiceCatchUp:event.target.value as Settings['voiceCatchUp']})}><option value="realtime">Replay in real time</option><option value="fast">Replay faster (1.3×)</option><option value="burst">Send as burst (experimental)</option></select></label>
+          <label className="field" title="How much speech it needs to hear before waking from standby. Higher ignores coughs and short noises."><span>Wake after speech of (ms)</span><input type="number" min={100} max={2000} step={50} value={draft.standbyWakeMs} onChange={event=>updateSettings({standbyWakeMs:Number(event.target.value)},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
+          <label className="field" title="If a wake hears no words within this time, it goes back to standby. 0 turns it off."><span>Re-sleep on false wake (seconds, 0 = off)</span><input type="number" min={0} max={120} step={5} value={draft.standbyFalseWakeSeconds} onChange={event=>updateSettings({standbyFalseWakeSeconds:Number(event.target.value)},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
         </div>
-        <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.voiceAckFiller} onChange={event=>setDraft({...draft,voiceAckFiller:event.target.checked})}/><span>Spoken “let me check” filler<small>Off skips the acknowledgement voice says before handing a request to the bridge. Applies from the next voice connection.</small></span></label>
-        <label className="field wide"><span>Voice instructions</span><textarea rows={4} maxLength={8000} value={draft.prompt} onChange={event=>setDraft({...draft,prompt:event.target.value})}/></label>
+        <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.voiceAckFiller} onChange={event=>updateSettings({voiceAckFiller:event.target.checked})}/><span>Spoken “let me check” filler<small>Off skips the acknowledgement voice says before handing a request to the bridge. Applies from the next voice connection.</small></span></label>
+        <label className="field wide"><span>Voice instructions</span><textarea rows={4} maxLength={8000} value={draft.prompt} onChange={event=>updateSettings({prompt:event.target.value},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
       </section>
       <details className="settings-section advanced"><summary>Advanced</summary>
-        <label className="field wide"><span>Codex executable</span><input value={draft.codexPath} placeholder="Use bundled Codex" onChange={event=>setDraft({...draft,codexPath:event.target.value})}/></label>
+        <label className="field wide"><span>Codex executable</span><input value={draft.codexPath} placeholder="Use bundled Codex" onChange={event=>updateSettings({codexPath:event.target.value},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
       </details>
-      {error&&<p className="dialog-error" role="alert">{error}</p>}
-      <footer className="dialog-footer"><button className="button-secondary" onClick={()=>setSettingsOpen(false)}>Cancel</button><button className="button-primary" disabled={saving} onClick={()=>void saveSettings()}>{saving?'Saving…':'Save'}</button></footer>
+      {settingsError&&<p className="dialog-error" role="alert">{settingsError} <button className="button-secondary" disabled={saving} onClick={()=>persistSettings(settingsDraft.current)}>Retry</button></p>}
+      <footer className="dialog-footer"><span role="status">{saving?'Saving…':settingsError?'Changes not saved':'Changes save automatically'}</span><button className="button-secondary" title="Restore settings from when you opened preferences" disabled={JSON.stringify(draft)===JSON.stringify(settingsStart.current)&&!settingsError} onClick={()=>{const initial={...settingsStart.current};settingsDraft.current=initial;setDraft(initial);persistSettings(initial);}}>Undo</button><button className="button-primary" onClick={()=>void closeSettings()}>Done</button></footer>
     </dialog>
   </div></LowPowerContext.Provider>;
 }

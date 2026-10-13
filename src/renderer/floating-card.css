@@ -1,0 +1,18 @@
+.floating-card {
+  position: fixed; z-index: 20; display: flex; flex-direction: column;
+  width: 640px; height: 580px; min-width: min(320px, calc(100vw - 24px)); min-height: min(280px, calc(100vh - 24px));
+  max-width: calc(100vw - 24px); max-height: calc(100vh - 24px);
+  color: var(--ink); background: var(--sheet); border: 1px solid var(--rule-2); border-radius: 16px;
+  box-shadow: 0 20px 70px -20px rgb(0 0 0 / .45); overflow: hidden; resize: both;
+  -webkit-app-region: no-drag;
+}
+.floating-card:focus-within { z-index: 22; }
+.floating-card-heading { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; min-height: 44px; padding: 6px 10px 6px 14px; border-bottom: 1px solid var(--rule); cursor: grab; touch-action: none; user-select: none; }
+.floating-card-heading:active { cursor: grabbing; }
+.floating-card-heading:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.floating-card-grip { color: var(--ink-3); font-size: 18px; }
+.floating-card-heading h2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 13px/1.4 var(--display); margin: 0; }
+.floating-card-actions { display: flex; gap: 4px; }
+.floating-card-body { display: flex; flex: 1; min-height: 0; min-width: 0; flex-direction: column; }
+.floating-card-body > iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: white; }
+.floating-card-body > .presentation-text { flex: 1; min-height: 0; overflow: auto; }

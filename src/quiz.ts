@@ -7,8 +7,6 @@ export interface QuizQuestionView {
   topic: string;
   difficulty: 1 | 2 | 3;
   choices?: string[];
-  /** Written by the coach in response to the learner's previous answer. */
-  followUp?: boolean;
 }
 export interface QuizQuestion extends QuizQuestionView {
   correctIndex?: number;
@@ -42,6 +40,14 @@ export interface QuizStats {
   averageSeconds: number | null;
   topics: { topic: string; answered: number; correct: number; accuracy: number }[];
 }
+export interface QuizAttachment {
+  fileId: string;
+  name: string;
+  available: boolean;
+  indexedPages: number;
+  citedPages: number[];
+  readPages: number[];
+}
 export interface QuizState {
   banks: { id: string; title: string; count: number }[];
   quiz: {
@@ -49,18 +55,17 @@ export interface QuizState {
     title: string;
     bankId: string;
     adaptive: boolean;
+    adaptiveMode: 'ai' | 'programmatic';
     status: 'active' | 'completed';
     answered: number;
     total: number;
+    maxQuestions: number | null;
     remaining: number;
     current: QuizQuestionView | null;
     lastResult: QuizAnswerResult | null;
     stats: QuizStats;
+    attachments: QuizAttachment[];
     coachBusy: boolean;
     coachError: string | null;
-    /** Follow-up mode (an opt-in setting): the coach writes the next question after every answer. */
-    followUps: boolean;
-    /** The answered question still awaiting its follow-up; the panel waits before moving on. */
-    followUpPending: boolean;
   } | null;
 }
