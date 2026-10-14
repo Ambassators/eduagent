@@ -85,7 +85,8 @@ test('macOS detects Zen, Chrome, Brave, Edge, Safari and named profiles without 
 test('Zen reads active WAL cookies, preserves scope, and excludes private/container/partitioned cookies', async t => {
   const home = await temporary(t), root = path.join(home, '.zen');
   const file = path.join(root, 'Profiles/abc.default/cookies.sqlite');
-  const db = await firefoxDB(file); t.after(() => db.close());
+  const db = await firefoxDB(file);
+  try {
   db.exec("PRAGMA journal_mode=WAL; INSERT INTO moz_cookies VALUES ('example.com', 'wal-cookie', 'fresh', '/', 1, 0, 0, 0, '')");
   const before = await readFile(file);
   const importer = new NativeCookieImporter({ home, platform: 'linux', env: {} });
@@ -96,6 +97,7 @@ test('Zen reads active WAL cookies, preserves scope, and excludes private/contai
   assert.equal(cookies[0].domain, '.example.com'); assert.equal(cookies[0].sameSite, 'strict'); assert.equal(cookies[0].httpOnly, true);
   assert.equal(cookies[1].path, '/app'); assert.equal('domain' in cookies[1], false); assert.equal('expirationDate' in cookies[1], false);
   assert.equal(cookies[2].name, 'wal-cookie');
+  } finally { db.close(); }
 });
 
 test('Chromium decrypts schema 24, counts blocked/mismatched cookies, and keeps session cookies', async t => {

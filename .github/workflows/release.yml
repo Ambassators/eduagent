@@ -48,7 +48,12 @@ jobs:
             echo 'macOS packages will be unsigned and require manual installation.' >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Build update packages and manifests
-        run: npm run dist:${{ matrix.platform }} -- ${{ matrix.arch }} ${{ env.MAC_SIGNING_ARGS }}
+        shell: bash
+        run: |
+          for signing_var in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!signing_var}" ]; then unset "$signing_var"; fi
+          done
+          npm run dist:${{ matrix.platform }} -- ${{ matrix.arch }} ${{ env.MAC_SIGNING_ARGS }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           CSC_LINK: ${{ matrix.platform == 'mac' && secrets.MAC_CSC_LINK || secrets.WIN_CSC_LINK }}
