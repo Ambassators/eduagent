@@ -30,6 +30,7 @@ test('answers continue during generation and coach additions stay behind the cur
     await turnStarted;
     const thread=calls.find(call=>call.method==='thread/start').args;
     const turn=calls.find(call=>call.method==='turn/start').args;
+    assert.equal(thread.ephemeral,true,'Internal quiz coaching must not create saved desktop chats');
     assert.equal(thread.model,'quiz-model');assert.equal(thread.config.model_reasoning_effort,'high');
     assert.equal(turn.model,'quiz-model');assert.equal(turn.effort,'high');
     assert.ok(states.some(state=>state.quiz?.coachBusy),'Coach must announce that it started before any tool call');
@@ -42,7 +43,7 @@ test('answers continue during generation and coach additions stay behind the cur
     assert.equal(engine.state.quiz.answered, 3);
     const context = await engine.executeTool({ threadId: 'coach', turnId: 'review', callId: 'stats', tool: 'read_quiz_stats', arguments: { quizId: quiz.quizId } });
     const stats = JSON.parse(context.contentItems[0].text);
-    assert.deepEqual(stats.askedQuestions.map(q => q.id), ['q0', 'q1', 'q2']);
+    assert.deepEqual(stats.askedQuestions.map(q => q.id), ['q1', 'q2']);
     assert.deepEqual(stats.queuedQuestions.map(q => q.id), ['q3']);
     engine.setMode('programmatic');
     await assert.rejects(engine.executeTool({ threadId: 'coach', turnId: 'review', callId: 'late', tool: 'append_quiz_questions', arguments: { quizId: quiz.quizId, questionIds: ['q3'] } }), /no longer authorized/);
@@ -98,9 +99,10 @@ test('programmatic mode challenges repeated success and avoids stacking same-top
 test('coach can consult any indexed page of cited PDFs but cannot read unrelated files', async () => {
   let started;
   const turnStarted = new Promise(resolve => { started = resolve; });
-  const client = { running: true, request: async method => {
+  let initialContext;
+  const client = { running: true, request: async (method,args) => {
     if (method === 'thread/start') return { thread: { id: 'source-coach' } };
-    if (method === 'turn/start') { started(); return { turn: { id: 'review', status: 'inProgress' } }; }
+    if (method === 'turn/start') { initialContext=JSON.parse(args.input[1].text);started(); return { turn: { id: 'review', status: 'inProgress' } }; }
     return {};
   } };
   const documents = [
@@ -115,13 +117,15 @@ test('coach can consult any indexed page of cited PDFs but cannot read unrelated
     await turnStarted;
     let n = 0;
     const call = (tool, args) => engine.executeTool({ threadId: 'source-coach', turnId: 'review', callId: String(n++), tool, arguments: { quizId: quiz.quizId, ...args } });
-    const stats = JSON.parse((await call('read_quiz_stats', {})).contentItems[0].text);
+    const stats = initialContext;
     assert.equal(stats.newAnswersSinceReview, 1);
     assert.deepEqual(stats.sourceDocuments[0].suggestedNextPages, [1,36]);
     assert.deepEqual(JSON.parse(engine.exportFile()).sourceFiles, [{fileId:'guide',title:'Study guide'}]);
     assert.deepEqual(stats.sourceDocuments.map(d => d.fileId), ['guide']);
     const source = JSON.parse((await call('read_quiz_source', { fileId: 'guide', page: 36, count: 1 })).contentItems[0].text);
     assert.equal(source.pages[0].page, 36);
+    const repeated=JSON.parse((await call('read_quiz_source',{fileId:'guide',page:36,count:1})).contentItems[0].text);
+    assert.equal(repeated.pages[0].unchanged,true);assert.equal(repeated.pages[0].text,undefined);
     assert.deepEqual(engine.state.quiz.attachments, [{ fileId: 'guide', name: 'Study guide', available: true, indexedPages: 2, citedPages: [], readPages: [36] }]);
     assert.match(source.pages[0].text, /BCNF/);
     await assert.rejects(call('read_quiz_source', { fileId: 'unrelated' }), /attached PDF/);
@@ -243,11 +247,40 @@ test('coach continues the same thread within fifteen minutes and rotates after i
     t.mock.timers.setTime(Date.now()+14*60*1000);
     done=finished();engine.answer({quizId:engine.state.quiz.id,questionId:'q0',choiceIndex:0});await done;
     assert.equal(threads.length,1);assert.equal(turns[1].threadId,firstId);
+    const update=JSON.parse(turns[1].input[1].text);assert.equal(update.contextMode,'delta');assert.deepEqual(update.recentAnswers.map(a=>a.questionId),['q0']);assert.equal(update.questionBank,undefined);
     t.mock.timers.setTime(Date.now()+15*60*1000+1);
     done=finished();engine.syncTranscript([{id:'later',role:'user',text:'Can we discuss this question?',final:true,time:Date.now()}]);await done;
+    assert.equal(JSON.parse(turns[2].input[1].text).recentDiscussion[0].text,'Can we discuss this question?');
     assert.equal(threads.length,2);assert.notEqual(turns[2].threadId,firstId);assert.ok(unsubscribed.includes(firstId));
     assert.equal(threads[0].args.config.model_auto_compact_token_limit,defaultSettings.compactAtTokens);
     done=finished();engine.startQuiz({bankId:bank.bankId,count:2});await done;
     assert.equal(threads.length,3,'A new quiz must not inherit another quiz’s coach context');
+  }finally{engine.shutdown();}
+});
+
+test('coach tool context appends only new grades and discussion; compaction resets the snapshot',async()=>{
+  let started;const began=new Promise(resolve=>{started=resolve;});const turns=[];
+  const client={running:true,request:async(method,args)=>{
+    if(method==='thread/start')return {thread:{id:'delta-coach'}};
+    if(method==='turn/start'){turns.push(args);started();return {turn:{id:'review',status:'inProgress'}};}
+    return {};
+  }};
+  const engine=new QuizEngine(client,()=>defaultSettings,process.cwd(),()=>{});let callId=0;
+  const read=async()=>JSON.parse((await engine.executeTool({threadId:'delta-coach',turnId:'review',callId:String(callId++),tool:'read_quiz_stats',arguments:{quizId:engine.state.quiz.id}})).contentItems[0].text);
+  try {
+    const spoken={id:'speech',role:'user',text:'I do not understand the first example.',final:true,time:Date.now()};
+    engine.syncTranscript([spoken]);
+    const bank=engine.createBank({title:'Delta',questions});engine.startQuiz({bankId:bank.bankId,count:3});
+    engine.answer({quizId:engine.state.quiz.id,questionId:'q0',choiceIndex:0});await began;
+    const first=JSON.parse(turns[0].input[1].text);assert.equal(first.contextMode,'snapshot');assert.equal(first.recentAnswers.length,1);
+    assert.equal(first.recentDiscussion[0].text,spoken.text,'Transcript must arrive automatically in the review input');
+    const unchanged=await read();assert.equal(unchanged.recentDiscussion,undefined);assert.equal(unchanged.recentAnswers,undefined);
+    engine.answer({quizId:engine.state.quiz.id,questionId:'q1',choiceIndex:0});
+    engine.syncTranscript([{...spoken,text:spoken.text+' Why does adding one work?'}]);
+    const delta=await read();assert.equal(delta.contextMode,'delta');assert.equal(delta.questionBank,undefined);
+    assert.deepEqual(delta.recentAnswers.map(a=>a.questionId),['q1']);
+    assert.equal(delta.recentDiscussion[0].text,' Why does adding one work?');
+    engine.notification({method:'item/completed',params:{threadId:'delta-coach',item:{type:'contextCompaction'}}});
+    const reset=await read();assert.equal(reset.contextMode,'snapshot');assert.equal(reset.recentAnswers.length,2);
   }finally{engine.shutdown();}
 });

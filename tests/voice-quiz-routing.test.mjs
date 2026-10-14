@@ -10,7 +10,10 @@ for (const answerModel of ['answer-model','']) test(`queued quiz and answer jobs
   const turns=[],logs=[];
   const settings={...defaultSettings,model:answerModel,reasoningEffort:'low',quizModel:'quiz-model',quizReasoningEffort:'high'};
   const client={running:true,request:async(method,args)=>{
-    if(method==='thread/start')return {thread:{id:'think'},model:'initial'};
+    if(method==='thread/start'){
+      assert.equal(args.ephemeral,true,'Internal Think sessions must not create saved desktop chats');
+      return {thread:{id:'think'},model:'initial'};
+    }
     if(method==='model/list')return {data:[{model:'service-default',isDefault:true}]};
     if(method==='turn/start'){turns.push(args);return {turn:{id:`turn-${turns.length}`,status:'inProgress'}};}
     return {};
@@ -87,4 +90,29 @@ for(const verified of [false,true])test(`quiz completion ${verified?'relays conf
     if(verified)assert.match(relayed[0],/Verified Think result/);
     else {assert.match(relayed[0],/did not create or verify/);assert.doesNotMatch(relayed[0],/Your quiz is ready/);}
   } finally {engine.shutdown();}
+});
+
+test('Think sends the active document once, then only edits or a post-compaction snapshot',async()=>{
+  let context=Array.from({length:40},(_,i)=>`Document line ${i}`).join('\n'),start;
+  const documents={...files,context:()=>context};const turns=[];
+  const client={running:true,request:async(method,args)=>{
+    if(method==='thread/start')return {thread:{id:'think'},model:'test-model'};
+    if(method==='turn/start'){turns.push(args);start();return {turn:{id:'turn',status:'inProgress'}};}
+    return {};
+  }};
+  const engine=new ThinkEngine(client,documents,()=>({...defaultSettings,model:'test-model'}),process.cwd(),()=>{},async()=>{},()=>{},async()=>{});
+  const ask=async()=>{
+    const began=new Promise(resolve=>{start=resolve;});await engine.requestThink('Explain this concept');await began;
+    engine.notification({method:'turn/completed',params:{threadId:'think',turn:{id:'turn',status:'completed'}}});
+    await new Promise(resolve=>setImmediate(resolve));return turns.at(-1);
+  };
+  try {
+    assert.equal((await ask()).additionalContext.active_document.value,context);
+    assert.equal((await ask()).additionalContext,undefined);
+    context=context.replace('Document line 20','Edited line 20');
+    const update=(await ask()).additionalContext.active_document.value;
+    assert.match(update,/Apply these changes/);assert.match(update,/Edited line 20/);assert.ok(update.length<context.length);
+    engine.notification({method:'item/completed',params:{threadId:'think',item:{type:'contextCompaction'}}});
+    assert.equal((await ask()).additionalContext.active_document.value,context);
+  }finally{engine.shutdown();}
 });

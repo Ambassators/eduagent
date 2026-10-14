@@ -10,6 +10,10 @@ import PDFAnnotationLayer from './PDFAnnotationLayer';
 import type { OrbTone } from './Orb';
 pdfjs.GlobalWorkerOptions.workerSrc=workerURL;
 type PDFVoice = {tone:OrbTone;label:string;disabled:boolean;onClick:()=>void;onVisible:(visible:boolean)=>void};
+const PDF_DARK_KEY='codex-voice-pdf-dark';
+function readPDFDark():boolean|null {
+  try{const value=localStorage.getItem(PDF_DARK_KEY);return value==='1'?true:value==='0'?false:null;}catch{return null;}
+}
 
 export function MarkdownView({text}:{text:string}) {
   return <RichMarkdown text={text}/>;
@@ -57,13 +61,15 @@ function PDFPage({pdf,page,width,zoom,scrollHost,onError,file,annotations,voice}
   </div>;
 }
 
-export default function DocumentViewer({file,onError,annotations,voice,source}:{file:DocumentInfo;onError:(message:string)=>void;annotations:PDFAnnotations;voice:PDFVoice;source?:DocumentSource|null}) {
+export default function DocumentViewer({file,onError,annotations,voice,source,darkMode=false}:{file:DocumentInfo;onError:(message:string)=>void;annotations:PDFAnnotations;voice:PDFVoice;source?:DocumentSource|null;darkMode?:boolean}) {
   const documentRoot=useRef<HTMLDivElement>(null);
   const [content,setContent]=useState<DocumentContent|null>(null),[bytes,setBytes]=useState<Uint8Array|null>(null);
   const [page,setPage]=useState(1),[zoom,setZoom]=useState(1),[editing,setEditing]=useState(false),[draft,setDraft]=useState(''),[loading,setLoading]=useState(true);
   const [pdf,setPDF]=useState<pdfjs.PDFDocumentProxy|null>(null),[imageURL,setImageURL]=useState('');
   const [pdfRevision,setPDFRevision]=useState<number|null>(null);
   const [hostWidth,setHostWidth]=useState(800);
+  const [pdfDarkPreference,setPDFDarkPreference]=useState(readPDFDark);
+  const pdfDark=pdfDarkPreference??darkMode;
   const pageHost=useRef<HTMLDivElement>(null);
   const errorRef=useRef(onError);errorRef.current=onError;
   useEffect(()=>{
@@ -96,6 +102,7 @@ export default function DocumentViewer({file,onError,annotations,voice,source}:{
     setPage(next);void window.desktop!.setPage(file.id,next).catch(error=>errorRef.current(error.message));
   }
   async function saveDraft(){try{const next=await window.desktop!.updateDocument(file.id,draft);setContent(next);setEditing(false);}catch(error){errorRef.current(error instanceof Error?error.message:String(error));}}
+  function togglePDFDark(){const next=!pdfDark;setPDFDarkPreference(next);try{localStorage.setItem(PDF_DARK_KEY,next?'1':'0');}catch{}}
   const editable=['text','markdown','html'].includes(file.kind)&&file.extension!=='.rtf';
   const sanitized=content?.html?DOMPurify.sanitize(content.html,{FORBID_TAGS:['script','iframe','form','object','embed','style'],FORBID_ATTR:['style'],ADD_DATA_URI_TAGS:['img']}):'';
   useEffect(()=>{
@@ -117,6 +124,7 @@ export default function DocumentViewer({file,onError,annotations,voice,source}:{
     <div className="doc-toolbar drag"><div className="doc-title"><span className={`file-glyph small ${file.kind}`}>{file.extension.slice(1).toUpperCase().slice(0,4)}</span><strong title={file.originalPath||file.name}>{file.name}</strong></div><div className="doc-actions">
       {file.kind==='pdf'&&<><span className="page-count">{page}<em>/</em>{pdf?.numPages??file.pageCount??'…'}</span>
       {annotationCount>0&&<button className="quiet-button" title="Clear temporary overlays, highlights, and pointing" onClick={()=>void window.desktop!.dismissPDFAnnotation().catch(error=>errorRef.current(error.message))}><Icon name="close" size={14}/>Clear overlays</button>}
+      <button className="icon-button pdf-dark-toggle" title={pdfDark?'Turn off dark PDF pages':'Turn on dark PDF pages'} aria-label="Dark PDF pages" aria-pressed={pdfDark} onClick={togglePDFDark}><Icon name="moon" size={16}/></button>
       <div className="control-group"><button title="Zoom out" aria-label="Zoom out" disabled={zoom<=.5} onClick={()=>setZoom(old=>Math.max(.5,old-.15))}><Icon name="minus" size={14}/></button><span>{Math.round(zoom*100)}%</span><button title="Zoom in" aria-label="Zoom in" disabled={zoom>=2} onClick={()=>setZoom(old=>Math.min(2,old+.15))}><Icon name="plus" size={14}/></button></div></>}
       {editable&&<button className="quiet-button" title={editing?'Preview':'Edit'} onClick={()=>setEditing(old=>!old)}><Icon name={editing?'eye':'edit'} size={14}/>{editing?'Preview':'Edit'}</button>}
       <button className="quiet-button" title="Save copy" onClick={()=>void window.desktop!.saveDocument(file.id,false).catch(error=>errorRef.current(error.message))}><Icon name="download" size={14}/>Save copy</button>
@@ -124,7 +132,7 @@ export default function DocumentViewer({file,onError,annotations,voice,source}:{
     </div></div>
     {file.warning&&<div className="document-warning">{file.warning}</div>}
     {loading?<div className="viewer-loading"><span className="loading-ring"/></div>:editing?<div className="text-editor"><textarea aria-label="Edit document text" spellCheck={false} value={draft} onChange={event=>setDraft(event.target.value)}/><div><span/><button className="button-primary" onClick={()=>void saveDraft()}><Icon name="check" size={15}/>Apply changes</button></div></div>:
-      file.kind==='pdf'?<div className="pdf-scroll" ref={pageHost} data-file-id={file.id} data-revision={file.revision} onScroll={trackPage}>{pdf&&pdfRevision===file.revision&&pageHost.current?Array.from({length:pdf.numPages},(_,index)=><PDFPage key={`${file.id}-${file.revision}-${index}`} pdf={pdf} page={index+1} width={Math.max(200,Math.min(840,hostWidth-56))} zoom={zoom} scrollHost={pageHost.current!} onError={onError} file={file} annotations={annotations} voice={voice}/>):<div className="viewer-loading"><span className="loading-ring"/></div>}</div>:
+      file.kind==='pdf'?<div className={`pdf-scroll${pdfDark?' pdf-dark':''}`} ref={pageHost} data-file-id={file.id} data-revision={file.revision} onScroll={trackPage}>{pdf&&pdfRevision===file.revision&&pageHost.current?Array.from({length:pdf.numPages},(_,index)=><PDFPage key={`${file.id}-${file.revision}-${index}`} pdf={pdf} page={index+1} width={Math.max(200,Math.min(840,hostWidth-56))} zoom={zoom} scrollHost={pageHost.current!} onError={onError} file={file} annotations={annotations} voice={voice}/>):<div className="viewer-loading"><span className="loading-ring"/></div>}</div>:
       file.kind==='image'?<div className="image-preview"><img src={imageURL} alt={file.name}/></div>:
       file.kind==='binary'?<div className="unsupported-preview"><span className={`file-glyph large ${file.kind}`}>{file.extension.slice(1).toUpperCase().slice(0,4)}</span><h2>{file.name}</h2><p>No preview · {(file.size/1024).toFixed(1)} KB</p></div>:
       <div className="paper-scroll"><article className="document-paper">{file.kind==='markdown'?<MarkdownView text={content?.text??''}/>:sanitized?<div className="word-body" onClick={event=>{const anchor=(event.target as HTMLElement).closest('a');if(anchor){event.preventDefault();void window.desktop!.openURL(anchor.href).catch(error=>errorRef.current(error.message));}}} dangerouslySetInnerHTML={{__html:sanitized}}/>:<pre className="plain-document">{content?.text||'This document contains no readable text.'}</pre>}</article></div>}

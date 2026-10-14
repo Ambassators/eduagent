@@ -25,6 +25,7 @@ import { glassTeXResponse, cleanTeXSettings, renderTeXPDF } from './glasstex.js'
 import { TEX_MAX_BYTES } from '../glasstex.js';
 import sanitizeHtml from 'sanitize-html';
 import { watchWindowActivity, windowIsActive } from './window-activity.js';
+import { ensurePresentationProtocol } from './presentation-protocol.js';
 
 protocol.registerSchemesAsPrivileged([{scheme:'codex-presentation',privileges:{standard:true,secure:true}}, {scheme:'codex-glasstex',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 
@@ -111,14 +112,14 @@ function displayPresentation(presentation:Presentation) {
   const existing=popups.get(presentation.id);if(existing&&!existing.isDestroyed()){existing.show();existing.focus();return;}
   const popup=new BrowserWindow({width:880,height:680,minWidth:400,minHeight:300,title:presentation.title,backgroundColor:'#f7f8fa',webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true,partition:'presentation-'+presentation.id}});
   popups.set(presentation.id,popup);
+  popup.on('closed',()=>popups.delete(presentation.id));
   popup.on('page-title-updated',event=>{event.preventDefault();popup.setTitle(presentation.title);});
   const followLink=(url:string)=>{if(presentation.kind==='text')void openWorkspaceLink(url).catch(error=>emit({method:'think/error',params:{message:error.message}}));};
   popup.webContents.setWindowOpenHandler(({url})=>{followLink(url);return {action:'deny'};});popup.webContents.on('will-navigate',(event,url)=>{event.preventDefault();followLink(url);});
   popup.webContents.session.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
   popup.webContents.session.setPermissionCheckHandler(()=>false);
-  popup.webContents.session.protocol.handle('codex-presentation',presentationResponse);
+  ensurePresentationProtocol(popup.webContents.session.protocol,presentationResponse);
   void popup.loadURL(`codex-presentation://${presentation.id}/`).catch(error=>emit({method:'think/error',params:{message:error.message}}));
-  popup.on('closed',()=>popups.delete(presentation.id));
 }
 async function presentationResponse(request:Request):Promise<Response> {
   const id=new URL(request.url).hostname,overlay=pdfOverlays.state.overlays.find(item=>item.id===id&&item.kind==='embed');
@@ -333,6 +334,7 @@ function registerIPC(): void {
   handle('browserRotatePairing', async () => { await browser.rotatePairing(); });
   handle('browserRevoke', (id: unknown) => browser.bridge.revoke(text(id, 100)));
   handle('browserImportCookies', (id: unknown) => browser.importCookies(text(id, 100)));
+  handle('browserCookieSources', () => browser.cookieSources());
   handle('browserExportExtensions', () => browser.exportExtensions());
   handle('status', status);
   handle('login', async () => {
@@ -559,7 +561,7 @@ async function initializeApp(): Promise<void> {
   onDebugLog(log=>emit({method:'debug/log',params:{log}}));
   thinker=new ThinkEngine(codex,documents,()=>settings,workspace,emit,relayToVoice,displayPresentation,async(name,args)=>isBrowserTool(name)?browser.execute(name,args):isQuizTool(name)?executeQuizTool(name,args):pdfOverlays.execute(name,args));
   codex.toolHandler=params=>quizzes.handlesThread(params.threadId)?quizzes.executeTool(params):thinker.executeTool(params);
-  protocol.handle('codex-presentation',presentationResponse);
+  ensurePresentationProtocol(protocol,presentationResponse);
   protocol.handle('codex-glasstex',glassTeXResponse(path.resolve(here,'../../renderer/glasstex')));
   nativeTheme.on('updated',()=>applyAppearance());
   registerIPC();

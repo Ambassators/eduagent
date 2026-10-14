@@ -1,4 +1,4 @@
-import type { BrowserState, BrowserBounds, CookieImportResult } from './browser.js';
+import type { BrowserState, BrowserBounds, CookieImportResult, CookieImportSource } from './browser.js';
 import type { QuizAnswerInput, QuizState, QuizSource } from './quiz.js';
 import type { TeXSettings } from './glasstex.js';
 export interface Settings {
@@ -101,6 +101,7 @@ export interface DesktopAPI {
   browserRotatePairing(): Promise<void>;
   browserRevoke(clientId: string): Promise<void>;
   browserImportCookies(clientId: string): Promise<CookieImportResult>;
+  browserCookieSources(): Promise<CookieImportSource[]>;
   browserExportExtensions(): Promise<boolean>;
   status(): Promise<Status>;
   login(): Promise<void>;

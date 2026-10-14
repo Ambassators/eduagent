@@ -7,6 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { BrowserWorkspace } from '../dist/main/main/browser.js';
+import { NativeCookieImporter } from '../dist/main/main/browser-native-cookies.js';
+import { cookieProfiles } from './browser-cookie-fixtures.mjs';
 import { defaultSettings } from '../dist/main/shared.js';
 app.on('window-all-closed',()=>{});
 process.on('uncaughtException',error=>{console.error(error);app.exit(1);});
@@ -14,12 +16,15 @@ async function main() {
   const profile = await mkdtemp(path.join(os.tmpdir(),'codex-browser-ui-'));
   app.setPath('userData',profile); await app.whenReady();
   const win = new BrowserWindow({width:1460,height:920,show:false,webPreferences:{preload:path.resolve('dist/main/main/preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,offscreen:true,backgroundThrottling:false}});
-  const browser = new BrowserWorkspace(profile,path.resolve('dist/extensions'),state=>{if(!win.isDestroyed())win.webContents.send('voice:event',{method:'browser/state',params:{state}});});
+  await cookieProfiles(profile);
+  const browser = new BrowserWorkspace(profile,path.resolve('dist/extensions'),state=>{if(!win.isDestroyed())win.webContents.send('voice:event',{method:'browser/state',params:{state}});},new NativeCookieImporter({home:profile,platform:'darwin',env:{}}));
+  let scanFailure = true;
   let peer;
   try {
     await browser.initialize(0); browser.attach(win);
     const handlers = {
       windowActivity:()=>false,
+      browserCookieSources:()=>{if(scanFailure){scanFailure=false;throw new Error('Synthetic detection failure');}return browser.cookieSources();},
       status:()=>({connected:false,account:null,models:[],voices:[],voiceAvailable:false,settings:defaultSettings,executable:'',platform:process.platform,darkMode:false}),
       workspace:()=>({files:[],activeId:null,artifacts:[],thinking:{threadId:null,busy:false,delegating:false,compacting:false,queued:0,tokens:0,contextWindow:null,contextVersion:0},annotations:{overlays:[],highlights:[],pointer:null},quiz:{banks:[],quiz:null}}),
       browserImportCookies:id=>browser.importCookies(id),browserState:()=>browser.state(),browserOpen:url=>browser.open(url),browserSelect:id=>browser.select(id),browserClose:id=>browser.closeTab(id),browserNavigate:(id,url)=>browser.navigate(id,url),browserControl:(id,action)=>browser.control(id,action),browserBounds:bounds=>browser.setBounds(bounds),browserPairing:()=>browser.pairing(),browserRotatePairing:()=>browser.rotatePairing(),browserRevoke:id=>browser.bridge.revoke(id),
@@ -38,13 +43,23 @@ async function main() {
     await win.webContents.executeJavaScript(`document.querySelector('.browser-cookie-button').click()`);
     await wait(`!!document.querySelector('.browser-cookie-setup')`);
     assert.equal(await win.webContents.executeJavaScript(`document.querySelector('.browser-cookie-setup h2').textContent`),'Import cookies');
+    await wait(`document.querySelector('.browser-cookie-setup [role="alert"]')?.textContent.includes('Try refreshing')`);
+    await wait(`!document.querySelector('.browser-cookie-heading button')?.disabled`);
+    await win.webContents.executeJavaScript(`document.querySelector('.browser-cookie-heading button').click()`);
+    await wait(`document.querySelectorAll('.browser-local-source').length===5`);
+    assert.equal(await win.webContents.executeJavaScript(`!!document.querySelector('.browser-cookie-setup [role="alert"]')`),false);
+    await win.webContents.executeJavaScript(`[...document.querySelectorAll('.browser-local-source')].find(el=>el.textContent.includes('Zen')).querySelector('button').click()`);
+    await wait(`document.querySelector('.browser-cookie-setup [role="status"]')?.textContent.includes('1 imported')`);
+    assert.equal(await win.webContents.executeJavaScript(`document.querySelector('.browser-cookie-setup').textContent.includes('local-native-only')`),false);
+    const localImagePath=path.join(os.tmpdir(),'codex-native-cookie-import-ui.png');await writeFile(localImagePath,(await win.webContents.capturePage()).toPNG());
+    await win.webContents.executeJavaScript(`document.querySelector('.browser-cookie-setup details summary').click()`);
     peer = new WebSocket(browser.pairing().endpoint,{origin:`chrome-extension://${'a'.repeat(32)}`});
     await once(peer,'open'); const ready=once(peer,'message');
     peer.send(JSON.stringify({type:'hello',token:browser.pairing().token,name:'Chromium'}));await ready;
     peer.on('message',raw=>{const message=JSON.parse(raw.toString());if(message.type==='command')peer.send(JSON.stringify({type:'result',id:message.id,result:message.command.action==='cookies-clear'?{cleared:true}:{cookies:[{name:'ui-test',value:'local-only',domain:'example.com',path:'/',secure:true,httpOnly:true,hostOnly:true,session:true,sameSite:'lax',storeId:'0'}],total:1,omitted:0}}));});
     peer.send(JSON.stringify({type:'tabs',tabs:[],cookieImportAvailable:true}));
-    await wait(`!!document.querySelector('.browser-cookie-setup .browser-client button:not(:disabled)')`);
-    await win.webContents.executeJavaScript(`document.querySelector('.browser-cookie-setup .browser-client button').click()`);
+    await wait(`!!document.querySelector('.browser-cookie-setup details .browser-client button:not(:disabled)')`);
+    await win.webContents.executeJavaScript(`document.querySelector('.browser-cookie-setup details .browser-client button').click()`);
     await wait(`document.querySelector('.browser-cookie-setup [role="status"]')?.textContent.includes('1 imported')`);
     const cookieImagePath=path.join(os.tmpdir(),'codex-cookie-import-ui.png');await writeFile(cookieImagePath,(await win.webContents.capturePage()).toPNG());
     assert.equal(await win.webContents.executeJavaScript(`document.querySelector('.browser-cookie-setup').textContent.includes('local-only')`),false);
@@ -53,7 +68,7 @@ async function main() {
     const imagePath=path.join(os.tmpdir(),'codex-browser-ui.png'); await writeFile(imagePath,(await win.webContents.capturePage()).toPNG());
     assert.equal(await win.webContents.executeJavaScript(`document.querySelector('.browser-setup h2').textContent`),'Connect your web apps');
     assert.deepEqual(errors,[]);
-    console.log(`PASS: production renderer/preload browser tab, extension setup, and cookie import button through real IPC. Screenshot: ${imagePath}`);
+    console.log(`PASS: production renderer/preload native profile detection, refresh retry, Zen import, extension fallback, and cookie import through real IPC. Screenshot: ${localImagePath}`);
   } catch(error) { console.error(error); process.exitCode=1; } finally {peer?.close();browser.shutdown();win.destroy();await rm(profile,{recursive:true,force:true});app.exit(process.exitCode || 0);}
 }
 void main().catch(error=>{console.error(error);app.exit(1);});

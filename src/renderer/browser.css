@@ -2,3 +2,8 @@
 
 .browser-cookie-button { flex-shrink: 0; border: 1px solid var(--rule); border-radius: 7px; padding: 6px 9px; background: transparent; color: inherit; font-size: 12px; cursor: pointer; }
 .browser-cookie-button.active { background: var(--glass-hover); }
+.browser-cookie-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.browser-source-profile { display: block; font-weight: normal; color: var(--ink-2); overflow-wrap: anywhere; }
+.browser-cookie-setup details { margin: 20px 0; }
+.browser-cookie-setup summary { cursor: pointer; font-weight: 600; }
+.browser-cookie-setup button:disabled { opacity: .55; cursor: default; }

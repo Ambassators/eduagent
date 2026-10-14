@@ -22,6 +22,7 @@ const api: DesktopAPI = {
   browserRotatePairing: () => ipcRenderer.invoke('voice:browserRotatePairing'),
   browserRevoke: id => ipcRenderer.invoke('voice:browserRevoke', id),
   browserImportCookies: id => ipcRenderer.invoke('voice:browserImportCookies', id),
+  browserCookieSources: () => ipcRenderer.invoke('voice:browserCookieSources'),
   browserExportExtensions: () => ipcRenderer.invoke('voice:browserExportExtensions'),
   status: () => ipcRenderer.invoke('voice:status'),
   login: () => ipcRenderer.invoke('voice:login'),

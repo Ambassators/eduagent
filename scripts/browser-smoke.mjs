@@ -8,6 +8,8 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { BrowserWorkspace } from '../dist/main/main/browser.js';
+import { NativeCookieImporter } from '../dist/main/main/browser-native-cookies.js';
+import { cookieProfiles } from './browser-cookie-fixtures.mjs';
 app.on('window-all-closed', () => {});
 async function main() {
 console.log('Starting Chromium smoke test');
@@ -23,7 +25,8 @@ const server = createServer((req,res) => {
 await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
 const url = `http://127.0.0.1:${server.address().port}`;
 const win = new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}});
-const workspace = new BrowserWorkspace(profile,path.resolve('dist/extensions'),()=>{});
+await cookieProfiles(profile);
+const workspace = new BrowserWorkspace(profile,path.resolve('dist/extensions'),()=>{},new NativeCookieImporter({home:profile,platform:'darwin',env:{}}));
 try {
   await workspace.initialize(0); console.log('Browser initialized'); workspace.attach(win);
   const peer = new WebSocket(workspace.pairing().endpoint,{origin:`chrome-extension://${'a'.repeat(32)}`});
@@ -48,6 +51,14 @@ try {
   assert.equal(savedCookies.find(item=>item.name==='test1').session,false);
   assert.equal((await session.defaultSession.cookies.get({domain:'127.0.0.1'})).length,0);
   assert.equal(JSON.stringify(workspace.state()).includes('value0'),false); peer.close();
+  const localSources = await workspace.cookieSources();
+  assert.deepEqual(new Set(localSources.map(source=>source.browser)),new Set(['Chrome','Brave','Edge','Zen','Safari']));
+  for (const source of localSources) assert.deepEqual(await workspace.importCookies(source.id),{imported:1,skipped:0,failed:0});
+  const native = await session.fromPartition('persist:workspace-browser').cookies.get({name:'native-fixture'});
+  assert.equal(native[0].value,'local-native-only'); assert.equal(native[0].httpOnly,true); assert.equal(native[0].session,true);
+  assert.equal((await session.defaultSession.cookies.get({name:'native-fixture'})).length,0);
+  assert.equal(JSON.stringify(workspace.state()).includes('local-native-only'),false);
+  assert.match((await workspace.importCookies('native:missing')).error,/Refresh/);
   const opened = workspace.open(); const tabId = opened.activeId;
   workspace.setBounds({x:0,y:0,width:600,height:400,visible:true});
   await workspace.navigate(tabId,url); 
@@ -69,7 +80,7 @@ try {
   workspace.setBounds({x:0,y:0,width:600,height:400,visible:false});
   assert.equal(win.contentView.children[0].getVisible(),false);
   workspace.select(tabId); workspace.closeTab(tabId); assert.equal(workspace.state().tabs.length,0);
-  console.log('PASS: paired batched cookie import with scope isolation, real Chromium navigation, snapshots, fill/select/click, password protection, history, view visibility, tab lifecycle.');
+  console.log('PASS: native Zen/Chrome/Brave/Edge/Safari and paired cookie import with scope isolation, real Chromium navigation, snapshots, fill/select/click, password protection, history, view visibility, tab lifecycle.');
 } catch(error) { console.error(error); process.exitCode=1; }
 finally { workspace.shutdown(); win.destroy(); await new Promise(resolve=>server.close(resolve)); await rm(profile,{recursive:true,force:true}); app.exit(process.exitCode || 0); }
 

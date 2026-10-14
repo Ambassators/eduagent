@@ -34,3 +34,4 @@ export function browserCommand(input: Record<string, unknown>): BrowserCommand {
 }
 
 export interface CookieImportResult { imported: number; skipped: number; failed: number; error?: string }
+export interface CookieImportSource { id: string; browser: string; profile: string }

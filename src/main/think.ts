@@ -98,7 +98,8 @@ export class ThinkEngine {
   private changed() { this.emit({method:'think/state',params:{state:{...this.state}}}); }
   private async create(kind:'voice'|'think'):Promise<string> {
     const response=await this.client.request('thread/start',{
-      model:this.settings().model||undefined,serviceTier:this.settings().priority?'priority':'default',cwd:this.workspace,ephemeral:false,sandbox:'read-only',approvalPolicy:'on-request',
+      // Voice and Think are internal sessions; working files preserve the user's work.
+      model:this.settings().model||undefined,serviceTier:this.settings().priority?'priority':'default',cwd:this.workspace,ephemeral:true,sandbox:'read-only',approvalPolicy:'on-request',
       baseInstructions:kind==='think'?thinkInstructions+'\n'+browserInstructions+'\n'+pdfToolInstructions+'\n'+quizToolInstructions:voiceInstructions+(this.settings().agentTools?'\n'+bridgeToolInstructions:'')+(this.settings().bridgeResearch?'\n'+bridgeResearchInstructions:'')+(this.settings().proactiveExplain?'\n'+showOnPageBridge(this.settings().agentTools):''),
       developerInstructions:kind==='voice'?this.settings().prompt:undefined,
       config:{'features.shell_tool':false,'features.code_mode_host':false,'features.apps':false,'features.plugins':false,'features.multi_agent':false,'mcp_servers':{},'web_search':kind==='think'||this.settings().bridgeResearch?'live':'disabled','model_reasoning_effort':kind==='think'?this.settings().reasoningEffort:'low','model_auto_compact_token_limit':this.settings().compactAtTokens},
@@ -148,6 +149,8 @@ export class ThinkEngine {
   }
   quietVoiceContext(kind:string,text:string) { this.voiceNotes.set(kind,{key:text,text});this.scheduleSync(); }
   private pointer='';
+  private thinkDocumentContext='';
+  private thinkDocumentId: string | null = null;
   /** Sent at the start and end of each utterance; synced at once so it reaches the bridge before the handoff. */
   pointerContext(text:string) {
     this.pointer=text;
@@ -268,7 +271,12 @@ export class ThinkEngine {
       const effort=job.generator==='quiz'?settings.quizReasoningEffort:settings.reasoningEffort;
       this.models.think=`${model||'default'} · ${effort}${settings.priority?' · priority':''}`;
       debugLog({id:`job:${job.id}`,agent:'think',kind:'route',label:'Think turn',detail:job.message,model:this.modelOf('think'),status:'running'});
-      const response=await this.client.request('turn/start',{threadId:id,model:model||undefined,serviceTier:settings.priority?'priority':'default',effort,input:[{type:'text',text:`Think request: ${job.message}\nUse the shared transcript and current file context already in this thread. Complete the work and show useful results on screen when appropriate.${settings.proactiveExplain?'\n'+showOnPageThink:''}`}],additionalContext:{active_document:{kind:'untrusted',value:this.files.context()},...(this.pointer?{pointer:{kind:'untrusted',value:this.pointer}}:{})}});
+      const documentContext=this.files.context(),previousDocument=this.thinkDocumentContext;
+      const changedDocument=documentContext!==previousDocument;
+      const documentDiff=changedDocument&&previousDocument&&this.thinkDocumentId===this.files.activeId?lineDiff(previousDocument,documentContext):null;
+      const additionalContext={...(changedDocument?{active_document:{kind:'untrusted',value:documentDiff===null?documentContext:`Apply these changes to the previous active document context (untrusted file data):\n${documentDiff}`}}:{}),...(this.pointer?{pointer:{kind:'untrusted',value:this.pointer}}:{})};
+      const response=await this.client.request('turn/start',{threadId:id,model:model||undefined,serviceTier:settings.priority?'priority':'default',effort,input:[{type:'text',text:`Think request: ${job.message}\nUse the shared transcript and current file context already in this thread. Complete the work and show useful results on screen when appropriate.${settings.proactiveExplain?'\n'+showOnPageThink:''}`}],...(Object.keys(additionalContext).length?{additionalContext}:{})});
+      if(this.thinkDocumentContext===previousDocument){this.thinkDocumentContext=documentContext;this.thinkDocumentId=this.files.activeId;}
       if(this.activeJob)this.turnId=response.turn.status==='inProgress'?response.turn.id:null;
       if(this.cancelRequested&&this.turnId)await this.client.request('turn/interrupt',{threadId:id,turnId:this.turnId});
       await finished;
@@ -326,7 +334,7 @@ export class ThinkEngine {
         if(this.activeJob)this.activeJob.output=item.text??'';
         this.emit({method:'think/message',params:{...p,item}});
       }
-      if(item?.type==='contextCompaction'){this.state.tokens=0;this.visualKey='';}
+      if(item?.type==='contextCompaction'){this.state.tokens=0;this.visualKey='';this.thinkDocumentContext='';this.thinkDocumentId=null;}
     }
     if(event.method==='turn/completed') {
       const turn=p.turn as {status:string;error?:{message?:string}};
@@ -446,7 +454,8 @@ export class ThinkEngine {
     }
   }
   disconnect() {
-    this.activeJob?.reject(new Error('Codex disconnected.'));this.voiceThreadId=null;this.voiceCreation=null;this.thinkCreation=null;
+    this.thinkDocumentContext='';this.thinkDocumentId=null;
+    this.activeJob?.reject(new Error('Codex disconnected'));this.voiceThreadId=null;this.voiceCreation=null;this.thinkCreation=null;
     this.state.threadId=null;this.models={voice:'',think:''};this.state.busy=false;this.state.delegating=false;this.originBusy=false;this.state.compacting=false;this.visualKey='';this.voiceNoted.clear();this.forgetVoiceDocument();this.synced.clear();clearTimeout(this.compactTimer);this.changed();
   }
   async reset() {

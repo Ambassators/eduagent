@@ -5,6 +5,7 @@ import path from 'node:path';
 import { browserURL, browserCommand, type BrowserBounds, type BrowserState, type BrowserTab, type BrowserDownload, type CookieImportResult } from '../browser.js';
 import { importedCookie } from './browser-cookies.js';
 import { BrowserBridge } from './browser-bridge.js';
+import { NativeCookieImporter } from './browser-native-cookies.js';
 
 export class BrowserWorkspace {
   private tabs = new Map<string, { view: WebContentsView; info: BrowserTab; ready: Promise<void> }>();
@@ -18,7 +19,7 @@ export class BrowserWorkspace {
   private saveTimer?: ReturnType<typeof setTimeout>;
   private saved: { urls: string[]; active: number } = { urls: [], active: 0 };
   bridge!: BrowserBridge;
-  constructor(private directory: string, private extensionDirectory: string, private changed: (state: BrowserState) => void) {}
+  constructor(private directory: string, private extensionDirectory: string, private changed: (state: BrowserState) => void, private nativeCookies = new NativeCookieImporter()) {}
   async initialize(bridgePort = 48765) {
     this.pageScript = await readFile(path.join(this.extensionDirectory, 'common/page.js'), 'utf8');
     try { this.token = (await readFile(path.join(this.directory, 'browser-pairing'), 'utf8')).trim(); } catch { /* first launch */ }
@@ -125,6 +126,7 @@ export class BrowserWorkspace {
     if (!response.ok) throw new Error(response.error);
     return response.result;
   }
+  cookieSources() { return this.nativeCookies.list(); }
   async importCookies(clientId: string): Promise<CookieImportResult> {
     if (this.importingCookies) throw new Error('A cookie import is already running.');
     this.importingCookies = true;
@@ -132,23 +134,27 @@ export class BrowserWorkspace {
     const transferId = randomUUID(), cookies = session.fromPartition('persist:workspace-browser').cookies;
     let offset = 0;
     try {
-      do {
-        const batch = await this.bridge.requestCookies(clientId, transferId, offset) as { cookies: unknown[]; total: number; omitted: number };
-        if (!batch || !Array.isArray(batch.cookies) || batch.cookies.length > 25 || !Number.isSafeInteger(batch.total) || batch.total < offset || batch.total > 20000 || !Number.isSafeInteger(batch.omitted) || batch.omitted < 0 || offset + batch.cookies.length > batch.total || (!batch.cookies.length && offset < batch.total)) throw new Error('Invalid cookie transfer response.');
-        if (offset === 0) result.skipped += batch.omitted;
-        for (const item of batch.cookies) {
-          try {
-            const details = importedCookie(item);
-            if (!details) { result.skipped++; continue; }
-            await cookies.set(details); result.imported++;
-          } catch { result.failed++; }
-        }
-        offset += batch.cookies.length;
-        if (offset === batch.total) break;
-      } while (offset < 20000);
+      if (clientId.startsWith('native:')) {
+        Object.assign(result, await this.nativeCookies.import(clientId, details => cookies.set(details)));
+      } else {
+        do {
+          const batch = await this.bridge.requestCookies(clientId, transferId, offset) as { cookies: unknown[]; total: number; omitted: number };
+          if (!batch || !Array.isArray(batch.cookies) || batch.cookies.length > 25 || !Number.isSafeInteger(batch.total) || batch.total < offset || batch.total > 20000 || !Number.isSafeInteger(batch.omitted) || batch.omitted < 0 || offset + batch.cookies.length > batch.total || (!batch.cookies.length && offset < batch.total)) throw new Error('Invalid cookie transfer response.');
+          if (offset === 0) result.skipped += batch.omitted;
+          for (const item of batch.cookies) {
+            try {
+              const details = importedCookie(item);
+              if (!details) { result.skipped++; continue; }
+              await cookies.set(details); result.imported++;
+            } catch { result.failed++; }
+          }
+          offset += batch.cookies.length;
+          if (offset === batch.total) break;
+        } while (offset < 20000);
+      }
     } catch (error) { result.error = error instanceof Error ? error.message : 'Cookie import interrupted.'; }
     finally {
-      try { await this.bridge.requestCookies(clientId, transferId, offset, true); } catch { /* disconnected source clears its temporary snapshot */ }
+      if (!clientId.startsWith('native:')) try { await this.bridge.requestCookies(clientId, transferId, offset, true); } catch { /* disconnected source clears its temporary snapshot */ }
       try { await cookies.flushStore(); } catch { result.error = 'Cookies were copied, but saving them failed.'; }
       this.importingCookies = false;
     }

@@ -69,12 +69,13 @@
 .qz-progress.is-bar > span { display: block; height: 100%; border-radius: 99px; background: var(--accent); transition: width var(--qz-state); }
 
 .qz-prompt { margin: 28px 0 24px; font-size: clamp(19px, 3.2cqw, 28px); line-height: 1.4; font-weight: 600; letter-spacing: -.012em; color: var(--ink); overflow-wrap: anywhere; outline: none; }
+.qz-prompt:focus-visible { outline: none; }
 
 /* ---------- Options ---------- */
 
 .qz-options { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .qz-option {
-  display: flex; align-items: flex-start; gap: 12px; width: 100%; min-height: 58px; padding: 16px 20px 16px 16px; gap: 14px; text-align: left;
+  display: flex; align-items: flex-start; gap: 14px; width: 100%; min-height: 58px; padding: 16px 20px 16px 16px; text-align: left;
   font-size: clamp(15px, 2cqw, 17px); line-height: 1.5; color: var(--ink);
   border-radius: 12px; background: var(--sheet); box-shadow: inset 0 0 0 1px var(--rule-2);
   transition: box-shadow .15s ease-out, background-color .15s ease-out;
@@ -121,8 +122,8 @@ button.qz-option:disabled { opacity: 1; cursor: default; }
 
 /* ---------- Explanation ---------- */
 
-/* Footnote markers: the last block of rendered Markdown runs inline so a marker can follow its final word. */
-.qz-inline > .markdown-body, .qz-inline > .markdown-body > :last-child { display: inline; }
+/* Footnotes can follow the final paragraph; code, lists, and other blocks keep their layout. */
+.qz-inline > .markdown-body, .qz-inline > .markdown-body > p:last-child { display: inline; }
 .qz-footnotes { display: inline-flex; gap: 3px; margin-left: 4px; vertical-align: super; line-height: 0; animation: qz-fade var(--qz-state) both; }
 .qz-fn { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; font: 600 11px/1 var(--mono); letter-spacing: 0; color: var(--accent-text); background: var(--accent-soft); transition: background-color .15s ease-out, color .15s ease-out; }
 .qz-fn:hover:not(:disabled) { color: var(--accent-ink); background: var(--accent); }

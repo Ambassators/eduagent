@@ -2,8 +2,29 @@ const object = (properties: Record<string, unknown>, required: string[] = []) =>
 const str = { type: 'string' };
 const source = object({ fileId: str, page: { type: 'integer', minimum: 1 }, label: str, quote: str }, ['fileId', 'page', 'label']);
 const sources = { type: 'array', items: source, maxItems: 5 };
+export const quizPromptInstructions = [
+  'Write every question prompt as readable Markdown. Put each setup fact or sentence in its own short paragraph, separated by a blank line. Put the actual question in a separate bold paragraph. Keep a simple one-sentence question compact. Never combine the setup, question, and code into one wall of text.',
+  'Put SQL and other multiline code in a fenced code block with the language tag, line breaks, and indentation. Use inline code for identifiers in prose. Include actual newline characters in the prompt string, not literal backslash-n text or HTML line-break tags. Apply this formatting when creating, appending, or replacing questions.',
+  'Example prompt:',
+  '`MEMBER` has exactly one row for member 10.',
+  '',
+  'That member has 3 matching `LOAN` rows.',
+  '',
+  "**In this query, what does `EXISTS` do to the member's row?**",
+  '',
+  '```sql',
+  'SELECT m.MemberID',
+  'FROM MEMBER m',
+  'WHERE EXISTS (',
+  '  SELECT 1',
+  '  FROM LOAN l',
+  '  WHERE l.MemberID = m.MemberID',
+  ');',
+  '```'
+].join('\n');
 const question = { ...object({
-  id: str, kind: { type: 'string', enum: ['choice', 'short'] }, prompt: str, topic: str,
+  id: str, kind: { type: 'string', enum: ['choice', 'short'] },
+  prompt: { ...str, description: 'Readable Markdown: separate setup facts with blank lines, put the question in its own bold paragraph, and put SQL/code in an indented language-tagged fenced block. Use actual newlines.' }, topic: str,
   difficulty: { type: 'integer', minimum: 1, maximum: 3 },
   choices: { type: 'array', items: str, minItems: 2, maxItems: 6 },
   choiceExplanations: { type: 'array', items: str, minItems: 2, maxItems: 6 },
@@ -25,4 +46,5 @@ export const quizTools = [
 const readSource = tool('read_quiz_source', 'Read extracted text from any indexed page of a PDF attached to this quiz. Use sourceDocuments from read_quiz_stats to choose the fileId. Read relevant sections to broaden skill coverage and verify citations before authoring questions. Images/diagrams are not included. Page numbers are one-based; count defaults three, maximum eight.', object({ quizId: str, fileId: str, page: { type: 'integer', minimum: 1 }, count: { type: 'integer', minimum: 1, maximum: 8 } }, ['quizId', 'fileId']));
 export const quizCoachTools = [readStats, readSource, appendQuestions, replaceQuestions];
 export const isQuizTool = (name: string) => quizTools.some(tool => tool.name === name);
-export const quizToolInstructions = `For quizzes based on a PDF, attach its verified file ID in sourceFileIds when creating the bank or starting the quiz. The whole PDF is attached, not just cited pages, so adaptive practice can gradually cover later sections. Start with a few questions. For quizzes, use create_question_bank to author well-grounded questions from the active file/study context, then start_quiz with its bankId. The quiz opens as a separate interactive .quiz working file and saves progress automatically. Default to choice questions for reasoning and varied distractors. EVERY choice question MUST include choiceExplanations with exactly one meaningful, specific rationale per option, in the same order as choices: explain why each wrong option fails and why the correct option works. Do not use generic "incorrect" or "correct" explanations. The learner selects an option and checks it; the rationales for their pick and the correct answer appear in place, and the other rationales are one click away. When teaching material is an open PDF or slides rendered as a PDF, use read_file to verify the precise fileId and one-based page, then attach choiceSources (one source array per option) and/or overall sources so the learner can jump directly to the teaching passage. Each source has fileId, page, label and optionally an exact quoted passage. Never invent file IDs, page numbers, or quotes. Short questions grade normalized exact accepted answers, so only use them if requested; restrict them to concise factual answers and include valid aliases. Explain the answer. A separate adaptive quiz coach quietly watches live performance and final user discussion and keeps two or three questions ready ahead and may replace future questions when useful, protecting the current and answered questions. Do not reveal unanswered keys in conversation. Use read_quiz_stats for progress and append_quiz_questions for deliberate additions. Never claim a quiz is visible before start_quiz succeeds.`;
+export const quizToolInstructions = `For quizzes based on a PDF, attach its verified file ID in sourceFileIds when creating the bank or starting the quiz. The whole PDF is attached, not just cited pages, so adaptive practice can gradually cover later sections. Start with a few questions. For quizzes, use create_question_bank to author well-grounded questions from the active file/study context, then start_quiz with its bankId. The quiz opens as a separate interactive .quiz working file and saves progress automatically. Default to choice questions for reasoning and varied distractors. EVERY choice question MUST include choiceExplanations with exactly one meaningful, specific rationale per option, in the same order as choices: explain why each wrong option fails and why the correct option works. Do not use generic "incorrect" or "correct" explanations. The learner selects an option and checks it; the rationales for their pick and the correct answer appear in place, and the other rationales are one click away. When teaching material is an open PDF or slides rendered as a PDF, use read_file to verify the precise fileId and one-based page, then attach choiceSources (one source array per option) and/or overall sources so the learner can jump directly to the teaching passage. Each source has fileId, page, label and optionally an exact quoted passage. Never invent file IDs, page numbers, or quotes. Short questions grade normalized exact accepted answers, so only use them if requested; restrict them to concise factual answers and include valid aliases. Explain the answer. A separate adaptive quiz coach quietly watches live performance and final user discussion and keeps two or three questions ready ahead and may replace future questions when useful, protecting the current and answered questions. Do not reveal unanswered keys in conversation. Use read_quiz_stats for progress and append_quiz_questions for deliberate additions. Never claim a quiz is visible before start_quiz succeeds.
+${quizPromptInstructions}`;

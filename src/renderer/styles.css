@@ -284,6 +284,12 @@ mark { color: inherit; background: none; }
 .pdf-sheet { position: relative; width: max-content; margin: 0 auto; border-radius: 4px; overflow: hidden; box-shadow: 0 0 0 1px rgba(14, 15, 17, .06), 0 24px 48px -26px rgba(14, 15, 17, .4); }
 .pdf-sheet canvas { display: block; background: #fff; }
 .pdf-sheet { background: #fff; }
+/* Filter only the rendered page so selection, overlays, and voice controls keep their colours. */
+.pdf-dark-toggle[aria-pressed="true"] { color: var(--accent-text); background: var(--accent-soft); }
+.pdf-scroll.pdf-dark { --ink: #f1f2ec; --ink-2: #a8abb1; --ink-3: #6d7178; --sheet: #141517; --sheet-2: #0d0e0f; --rule: rgba(255, 255, 255, .07); --glass-hover: rgba(255, 255, 255, .055); background: var(--sheet-2); color-scheme: dark; }
+.pdf-dark .pdf-sheet { background: #1a1a1a; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 24px 48px -26px rgba(0, 0, 0, .65); }
+.pdf-dark .pdf-sheet canvas { filter: invert(.9) hue-rotate(180deg); }
+.pdf-dark .pdf-text-highlight { mix-blend-mode: screen; background: oklch(78% .14 85 / .25); }
 .pdf-sheet + .pdf-sheet { margin-top: 24px; }
 .pdf-sheet .textLayer { position: absolute; left: 0; top: 0; overflow: hidden; --user-unit: 1; --total-scale-factor: var(--scale-factor); }
 .pdf-annotations { position: absolute; inset: 0; pointer-events: none; z-index: 3; }

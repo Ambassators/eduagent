@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { BrowserState, CookieImportResult } from '../browser';
+import type { BrowserState, CookieImportResult, CookieImportSource } from '../browser';
 import Icon from './Icon';
 import './browser.css';
 const api = () => { if (!window.desktop) throw new Error('Run the desktop app to use the browser.'); return window.desktop; };
@@ -8,12 +8,33 @@ export default function BrowserPanel({ state, blocked, onError }: { state: Brows
   const [address, setAddress] = useState('');
   const [extensions, setExtensions] = useState(false);
   const [cookiePanel, setCookiePanel] = useState(false);
-  const [importing, setImporting] = useState(false);
+  const [importing, setImporting] = useState<string | null>(null);
+  const [sources, setSources] = useState<CookieImportSource[]>([]);
+  const [scanning, setScanning] = useState(false);
+  const [sourceError, setSourceError] = useState('');
+  const scanId = useRef(0);
   const [cookieResult, setCookieResult] = useState<CookieImportResult | null>(null);
   const [pairing, setPairing] = useState<{ token: string; endpoint: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const active = state?.tabs.find(tab => tab.id === state.activeId);
   const run = async (action: () => Promise<unknown>) => { try { await action(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); } };
+  const scanSources = async () => {
+    const id = ++scanId.current;
+    setScanning(true); setSourceError('');
+    try { const found = await api().browserCookieSources(); if (id === scanId.current) setSources(found); }
+    catch { if (id === scanId.current) setSourceError('Could not detect browser profiles. Try refreshing.'); }
+    finally { if (id === scanId.current) setScanning(false); }
+  };
+  useEffect(() => {
+    if (cookiePanel) void scanSources();
+    return () => { scanId.current++; };
+  }, [cookiePanel]);
+  const importSource = async (id: string) => {
+    setImporting(id); setCookieResult(null);
+    try { setCookieResult(await api().browserImportCookies(id)); }
+    catch { setCookieResult({ imported: 0, skipped: 0, failed: 0, error: 'Cookie import could not start. Try again.' }); }
+    finally { setImporting(null); }
+  };
   useEffect(() => { setAddress(active?.url === 'about:blank' ? '' : active?.url ?? ''); }, [active?.id, active?.url]);
   useLayoutEffect(() => {
     const element = viewport.current;
@@ -47,17 +68,22 @@ export default function BrowserPanel({ state, blocked, onError }: { state: Brows
     </div>
     <div className="browser-viewport" ref={viewport}>
       {cookiePanel ? <div className="browser-setup browser-cookie-setup">
-        <h2>Import cookies</h2><p>Copy cookies from your Chrome/Chromium or Firefox profile into this browser to reuse website sign-ins. Matching cookies in this app will be replaced.</p>
-        <p>Connect a browser using <button className="button-quiet" onClick={openExtensions}>Extensions</button>, then open its extension popup and choose <strong>Enable cookie import</strong>.</p>
+        <h2>Import cookies</h2><p>Choose a browser profile to reuse its website sign-ins. Profiles are detected automatically. Matching cookies in this app will be replaced.</p>
+        <div className="browser-cookie-heading"><h3>On this device</h3><button disabled={scanning || !!importing} onClick={() => void scanSources()}>{scanning ? 'Detecting…' : 'Refresh'}</button></div>
+        {sourceError && <p role="alert">{sourceError}</p>}
+        {!scanning && !sources.length && !sourceError && <p>No local profiles found for Zen, Chrome, Brave, Edge, Safari, or other supported browsers.</p>}
+        {sources.map(source => <div className="browser-client browser-local-source" key={source.id}><strong>{source.browser}<span className="browser-source-profile">{source.profile}</span></strong><button disabled={!!importing || scanning} onClick={() => void importSource(source.id)}>{importing === source.id ? 'Importing…' : 'Import cookies'}</button></div>)}
+        <p>macOS may ask for Keychain access. Safari may need Full Disk Access. Close the source browser and retry if its cookies cannot be read.</p>
+        <details><summary>Import from a connected extension</summary><p>Connect a browser using <button className="button-quiet" onClick={openExtensions}>Extensions</button>, then choose <strong>Enable cookie import</strong> in its popup. This also works when system encryption blocks direct import.</p>
         {!state?.clients.length && <p>No source browsers connected.</p>}
-        {state?.clients.map(client => <div className="browser-client" key={client.id}><strong>{client.name === 'Chromium' ? 'Chrome / Chromium' : client.name}</strong><button disabled={importing || !client.cookieImportAvailable} onClick={() => void run(async () => { setImporting(true); setCookieResult(null); try { setCookieResult(await api().browserImportCookies(client.id)); } finally { setImporting(false); } })}>{importing ? 'Importing…' : 'Import cookies'}</button>{!client.cookieImportAvailable && <p>Enable cookie import in this browser’s extension popup.</p>}</div>)}
-        {cookieResult && <p role={cookieResult.error ? 'alert' : 'status'}>{cookieResult.imported} imported · {cookieResult.skipped} skipped · {cookieResult.failed} failed.{cookieResult.error && ` ${cookieResult.error}`} Reload your tabs to use the imported cookies.</p>}
+        {state?.clients.map(client => <div className="browser-client" key={client.id}><strong>{client.name === 'Chromium' ? 'Chrome / Chromium / Brave / Edge' : client.name}</strong><button disabled={!!importing || !client.cookieImportAvailable} onClick={() => void importSource(client.id)}>{importing === client.id ? 'Importing…' : 'Import cookies'}</button>{!client.cookieImportAvailable && <p>Enable cookie import in this browser’s extension popup.</p>}</div>)}</details>
+        {cookieResult && <p role={cookieResult.error || cookieResult.failed ? 'alert' : 'status'}>{cookieResult.imported} imported · {cookieResult.skipped} skipped · {cookieResult.failed} failed.{cookieResult.error && ` ${cookieResult.error}`}{cookieResult.imported > 0 && ' Reload your tabs to use the imported cookies.'}</p>}
         <p>Cookie values stay on this device and are kept out of chat. Private browsing, Firefox containers, and partitioned cookies are excluded. Some websites may still ask you to sign in.</p>
       </div> : extensions ? <div className="browser-setup">
-        <h2>Connect your web apps</h2><p>Install the bridge in Chrome, Chromium, Edge, Brave, or Firefox. Pair it here, then choose <strong>Share current tab</strong> in the extension to let Think read and interact with that web app.</p>
+        <h2>Connect your web apps</h2><p>Install the bridge in Chrome, Chromium, Edge, Brave, Firefox, or Zen. Pair it here, then choose <strong>Share current tab</strong> in the extension to let Think read and interact with that web app.</p>
         {state?.bridge.error && <p role="alert">{state.bridge.error}</p>}
         <ol><li><button className="button-quiet" onClick={() => void run(() => api().browserExportExtensions())}>Export extensions…</button></li>
-          <li>Chromium: open <code>chrome://extensions</code>, enable Developer mode, and load the exported <code>codex-voice-chromium</code> folder. Firefox: open <code>about:debugging#/runtime/this-firefox</code>, choose Load Temporary Add-on, and select the Firefox manifest.</li>
+          <li>Chrome, Brave, and Edge: open their extensions page, enable Developer mode, and load the exported <code>codex-voice-chromium</code> folder. Firefox and Zen: open <code>about:debugging#/runtime/this-firefox</code>, choose Load Temporary Add-on, and select the Firefox manifest.</li>
           <li><button className="button-quiet" disabled={!state?.bridge.available} onClick={() => void run(async () => { setPairing(await api().browserPairing()); setCopied(false); })}>Show pairing details</button>{pairing && <div className="browser-pairing"><label>Endpoint<input readOnly value={pairing.endpoint}/></label><label>Pairing key<input type="password" readOnly value={pairing.token}/></label><button onClick={() => void run(async () => { await navigator.clipboard.writeText(pairing.token); setCopied(true); })}>{copied?'Copied':'Copy pairing key'}</button></div>}</li>
           <li>Paste these details into the extension’s pairing section, then share the web app tab.</li></ol>
         <p>Shared page content can be sent to your Think/voice backend when you ask it to use the page. Sharing stops when the tab closes or changes sites. Firefox temporary installs last until Firefox restarts; permanent installation requires Mozilla signing.</p>

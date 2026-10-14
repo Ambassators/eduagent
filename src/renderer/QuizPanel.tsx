@@ -25,6 +25,12 @@ function message(error: unknown) {
   return error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : String(error);
 }
 
+function AnswerText({ text }: { text: string }) {
+  // A standalone numeric answer such as "100." is text, not an empty Markdown list.
+  const markdown = text.replace(/^(\s*\d+)([.)])(\s*)$/, '$1\\$2$3');
+  return <RichMarkdown text={markdown} />;
+}
+
 /** One column for the whole quiz: the question stays in place while it is checked, explained, and replaced. */
 export default function QuizPanel({ state, onAnswer, onSetMaxQuestions, onClose, onOpenSource }: QuizPanelProps) {
   const quiz = state.quiz;
@@ -232,7 +238,7 @@ function Question({ quiz, question, feedback, results, busy, error, onSetMaxQues
           {question.choices!.map((option, index) => <button key={index} type="button" role="radio" aria-checked={choice === index} data-option="true" aria-keyshortcuts={choiceKey(index)}
             className={`qz-option ${choice === index ? 'is-selected' : ''}`} disabled={busy} onClick={() => setChoice(index)}>
             <span className="qz-key" aria-hidden="true">{choiceKey(index)}</span>
-            <span className="qz-option-text"><RichMarkdown text={option} /></span>
+            <span className="qz-option-text"><AnswerText text={option} /></span>
           </button>)}
         </div>
       : answered ? <ShortReview feedback={feedback} />
@@ -274,7 +280,7 @@ function Review({ feedback, busy, onOpenSource }: { feedback: QuizAnswerResult; 
         return <li key={index} className={`qz-option ${status}`}>
           <span className="qz-key" aria-hidden="true">{option.correct ? <Icon name="check" size={13} /> : option.selected ? <Icon name="close" size={13} /> : choiceKey(index)}</span>
           <div className="qz-option-text">
-            <RichMarkdown text={option.text} />
+            <AnswerText text={option.text} />
             {(option.correct || option.selected) && <span className="qz-badge">{option.correct && option.selected ? 'Your answer · correct' : option.selected ? 'Your answer' : 'Correct answer'}</span>}
             {explain && (option.explanation || option.correct && feedback.explanation) && <div className="qz-why qz-inline">
               <RichMarkdown text={option.correct ? merge(option.explanation, feedback.explanation) : option.explanation} />
@@ -297,11 +303,11 @@ function ShortReview({ feedback }: { feedback: QuizAnswerResult }) {
   return <div className="qz-options is-review">
     <div className={`qz-option ${feedback.correct ? 'is-right' : 'is-wrong'}`}>
       <span className="qz-key" aria-hidden="true"><Icon name={feedback.correct ? 'check' : 'close'} size={13} /></span>
-      <div className="qz-option-text"><RichMarkdown text={feedback.submitted} /><span className="qz-badge">Your answer</span>{feedback.correct && why}</div>
+      <div className="qz-option-text"><AnswerText text={feedback.submitted} /><span className="qz-badge">Your answer</span>{feedback.correct && why}</div>
     </div>
     {!feedback.correct && <div className="qz-option is-right">
       <span className="qz-key" aria-hidden="true"><Icon name="check" size={13} /></span>
-      <div className="qz-option-text"><RichMarkdown text={feedback.answer} /><span className="qz-badge">Correct answer</span>{why}</div>
+      <div className="qz-option-text"><AnswerText text={feedback.answer} /><span className="qz-badge">Correct answer</span>{why}</div>
     </div>}
   </div>;
 }
