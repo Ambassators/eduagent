@@ -13,13 +13,16 @@ jobs:
         include:
           - runner: macos-14
             platform: mac
-            arch: '--arm64 --x64'
+            arch: arm64
+          - runner: macos-15-intel
+            platform: mac
+            arch: x64
           - runner: windows-latest
             platform: win
-            arch: '--x64'
+            arch: x64
           - runner: ubuntu-latest
             platform: linux
-            arch: '--x64'
+            arch: x64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +36,8 @@ jobs:
         run: |
           node --input-type=module -e 'import p from "./package.json" with {type:"json"}; if (!/^v\d+\.\d+\.\d+$/.test(process.env.GITHUB_REF_NAME) || process.env.GITHUB_REF_NAME !== `v${p.version}`) throw Error("Run on a stable v<package.json version> tag.");'
       - run: npm test
+      - name: Validate native package architecture
+        run: node -e "const assert = require('node:assert/strict'); assert.equal(process.arch, '${{ matrix.arch }}'); require.resolve('@openai/codex-' + process.platform + '-' + process.arch + '/package.json'); require.resolve('@napi-rs/canvas'); require('@napi-rs/canvas').createCanvas(1, 1);"
       - name: Configure macOS signing
         if: matrix.platform == 'mac'
         shell: bash
@@ -53,7 +58,7 @@ jobs:
           for signing_var in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
             if [ -z "${!signing_var}" ]; then unset "$signing_var"; fi
           done
-          npm run dist:${{ matrix.platform }} -- ${{ matrix.arch }} ${{ env.MAC_SIGNING_ARGS }}
+          npm run dist:${{ matrix.platform }} -- --${{ matrix.arch }} ${{ env.MAC_SIGNING_ARGS }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           CSC_LINK: ${{ matrix.platform == 'mac' && secrets.MAC_CSC_LINK || secrets.WIN_CSC_LINK }}
@@ -70,7 +75,7 @@ jobs:
           if [ -z "$CSC_LINK" ]; then rm -f release/latest-mac.yml; fi
       - uses: actions/upload-artifact@v4
         with:
-          name: update-${{ matrix.platform }}
+          name: update-${{ matrix.platform }}-${{ matrix.arch }}
           if-no-files-found: error
           path: |
             release/*.exe
@@ -86,15 +91,22 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
       - uses: actions/download-artifact@v4
         with:
           pattern: update-*
           path: packages
-          merge-multiple: true
+      - name: Combine packages and signed Mac update manifests
+        run: node scripts/prepare-release-assets.mjs packages release-assets
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           draft: true
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: packages/*
+          files: release-assets/*
