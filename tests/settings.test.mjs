@@ -23,3 +23,11 @@ test('invalid generator settings are rejected or normalized', () => {
   assert.throws(()=>cleanSettings({quizModel:42}),/Invalid input/);
   assert.equal(cleanSettings({quizReasoningEffort:'invalid'}).quizReasoningEffort,defaultSettings.quizReasoningEffort);
 });
+
+test('sidebar file preference survives saving and old display preferences remain valid', () => {
+  for(const demoPlacement of ['side','popup','file']) {
+    const saved=cleanSettings({demoPlacement});
+    assert.equal(cleanSettings(JSON.parse(JSON.stringify(saved))).demoPlacement,demoPlacement);
+  }
+  assert.equal(cleanSettings({demoPlacement:'invalid'}).demoPlacement,defaultSettings.demoPlacement);
+});

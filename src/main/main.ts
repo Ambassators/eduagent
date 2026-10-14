@@ -25,7 +25,9 @@ import { glassTeXResponse, cleanTeXSettings, renderTeXPDF } from './glasstex.js'
 import { TEX_MAX_BYTES } from '../glasstex.js';
 import sanitizeHtml from 'sanitize-html';
 import { watchWindowActivity, windowIsActive } from './window-activity.js';
-import { ensurePresentationProtocol } from './presentation-protocol.js';
+import { ensurePresentationProtocol, documentPresentationResponse } from './presentation-protocol.js';
+import electronUpdater from 'electron-updater';
+import { AppUpdates } from './updates.js';
 
 protocol.registerSchemesAsPrivileged([{scheme:'codex-presentation',privileges:{standard:true,secure:true}}, {scheme:'codex-glasstex',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 
@@ -55,6 +57,9 @@ let pdfOverlays: PDFOverlays;
 let quizzes: QuizEngine;
 let quizFiles: QuizFiles;
 let browser: BrowserWorkspace;
+let updates: AppUpdates;
+let updateTimer: ReturnType<typeof setInterval> | undefined;
+let firstUpdateCheck: ReturnType<typeof setTimeout> | undefined;
 let quizVoiceKey='';
 const popups = new Map<string, BrowserWindow>();
 const emit = (event: AppEvent) => {
@@ -122,6 +127,8 @@ function displayPresentation(presentation:Presentation) {
   void popup.loadURL(`codex-presentation://${presentation.id}/`).catch(error=>emit({method:'think/error',params:{message:error.message}}));
 }
 async function presentationResponse(request:Request):Promise<Response> {
+  const documentResponse=documentPresentationResponse(documents,request);
+  if(documentResponse)return documentResponse;
   const id=new URL(request.url).hostname,overlay=pdfOverlays.state.overlays.find(item=>item.id===id&&item.kind==='embed');
   const presentation=thinker.artifacts.find(item=>item.id===id)??(overlay?{kind:'demo',content:overlay.content}:undefined);
   if(!presentation)return new Response('Presentation not found.',{status:404});
@@ -142,6 +149,13 @@ function chatPath(value: unknown): string {
   const id=text(value,36);
   if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id))throw new Error('Invalid chat ID.');
   return path.join(chatsDir(),`${id}.json`);
+}
+async function resetConversation(): Promise<void> {
+  await stopVoice(); await interruptBackend();
+  await thinker.reset();
+  pdfOverlays.reset();
+  quizzes.reset();quizVoiceKey='';
+  threadId = null; turnId = null;
 }
 async function ensureCodex(): Promise<void> {
   if (!startPromise) startPromise = codex.start(settings.codexPath || bundledCodex(), workspace).catch(error => { startPromise = null; throw error; });
@@ -323,6 +337,15 @@ function registerIPC(): void {
     });
   }
   handle('windowActivity', () => !!window && windowIsActive(window));
+  handle('updateState', () => updates.state);
+  handle('checkForUpdates', () => updates.check());
+  handle('downloadUpdate', () => updates.download());
+  handle('installUpdate', () => updates.install(async () => {
+    if (thinker.state.busy || thinker.state.queued || thinker.state.delegating || thinker.state.compacting || voiceActive || voiceStarting) throw new Error('Finish the current work before restarting.');
+    await quizFiles.flush();
+    await documents.whenIdle();
+  }));
+  handle('updateDownloads', () => shell.openExternal('https://github.com/Ambassators/eduagent/releases/latest'));
   handle('browserState', () => browser.state());
   handle('browserOpen', (url: unknown) => browser.open(url === undefined ? undefined : text(url, 8000)));
   handle('browserSelect', (id: unknown) => browser.select(text(id, 100)));
@@ -390,13 +413,7 @@ function registerIPC(): void {
       if (interruptRequested && turnId) await codex.request('turn/interrupt', { threadId: id, turnId });
     } finally { startingTurn = false; }
   });
-  handle('new', async () => {
-    await stopVoice(); await interruptBackend();
-    await thinker.reset();
-    pdfOverlays.reset();
-    quizzes.reset();quizVoiceKey='';
-    threadId = null; turnId = null;
-  });
+  handle('new', resetConversation);
   handle('workspace',()=>workspaceState());
   handle('resolvePDFTool',(id:unknown,result:unknown,error:unknown)=>pdfOverlays.resolve(text(id,100),result,error===undefined?undefined:text(error,2000)));
   handle('dismissPDFAnnotation',(id:unknown)=>pdfOverlays.dismiss(id===undefined?undefined:text(id,100)));
@@ -503,6 +520,16 @@ function registerIPC(): void {
     return chats.filter(chat=>chat!==null).sort((a,b)=>b.updated-a.updated);
   });
   handle('loadChat',async(value:unknown)=>JSON.parse(await readFile(chatPath(value),'utf8')) as SavedChat);
+  handle('resumeChat',async(value:unknown)=>{
+    // Read and validate before replacing the active conversation.
+    const saved=JSON.parse(await readFile(chatPath(value),'utf8')) as SavedChat;
+    const finished=(entries:unknown)=>cleanEntries(entries).map(entry=>({...entry,final:true}));
+    const chat:SavedChat={...saved,id:text(value,36),title:text(saved.title,200),entries:finished(saved.entries),think:finished(saved.think)};
+    await resetConversation();
+    // Think requests duplicate the user's transcript; only restore its answers.
+    thinker.syncTranscript([...chat.entries,...chat.think.filter(entry=>entry.role==='assistant')]);
+    return chat;
+  });
   handle('deleteChat',async(value:unknown)=>{await rm(chatPath(value),{force:true});});
   handle('help', () => shell.openExternal('https://learn.chatgpt.com/docs/features/voice'));
 }
@@ -564,6 +591,10 @@ async function initializeApp(): Promise<void> {
   ensurePresentationProtocol(protocol,presentationResponse);
   protocol.handle('codex-glasstex',glassTeXResponse(path.resolve(here,'../../renderer/glasstex')));
   nativeTheme.on('updated',()=>applyAppearance());
+  const updateDisabled = !app.isPackaged ? 'Updates are available in the installed app. Source builds update through Git.'
+    : process.platform === 'linux' && !process.env.APPIMAGE ? 'Install the AppImage to update in the app.' : undefined;
+  updates = new AppUpdates(electronUpdater.autoUpdater, app.getVersion(), updateDisabled,
+    state => emit({ method: 'app/update', params: { state } }));
   registerIPC();
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
@@ -571,6 +602,11 @@ async function initializeApp(): Promise<void> {
     { role: 'help', submenu: [{ label: 'Subscription voice help', click: () => { void shell.openExternal('https://learn.chatgpt.com/docs/features/voice'); } }] }
   ]));
   initialized = true; createWindow();
+  if (!updateDisabled) {
+    firstUpdateCheck = setTimeout(() => { void updates.check(); }, 15_000);
+    updateTimer = setInterval(() => { void updates.check(); }, 4 * 60 * 60 * 1000);
+    firstUpdateCheck.unref(); updateTimer.unref();
+  }
 }
 // Only the local development supervisor can request reloads through its parent IPC channel.
 if (!app.isPackaged && process.env.CODEX_VOICE_DEV_RELOAD === '1' && process.send) {
@@ -590,7 +626,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
   app.on('activate', () => { if (initialized && !BrowserWindow.getAllWindows().length) createWindow(); });
-  app.on('before-quit', () => { browser?.shutdown(); thinker?.shutdown(); quizzes?.shutdown(); for(const popup of popups.values())popup.destroy(); codex.close(); });
+  app.on('before-quit', () => { clearTimeout(firstUpdateCheck); clearInterval(updateTimer); browser?.shutdown(); thinker?.shutdown(); quizzes?.shutdown(); for(const popup of popups.values())popup.destroy(); codex.close(); });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   void app.whenReady().then(initializeApp).catch(startupFailed);
 }

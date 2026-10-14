@@ -277,11 +277,11 @@ export class DocumentStore {
     pdf.getForm().updateFieldAppearances(font);
     return this.commit(record, Buffer.from(await pdf.save()));
   }); }
-  async create(name: string, format: 'text'|'markdown'|'pdf'|'docx'|'quiz', text: string) {
+  async create(name: string, format: 'text'|'markdown'|'html'|'pdf'|'docx'|'quiz', text: string) {
     if (this.records.size >= 40) throw new Error('Close a file before creating another.');
-    if (!text || text.length > (format==='quiz'?20000000:200000)) throw new Error('Provide content shorter than 200,000 characters.');
+    if (!text || text.length > (format==='quiz'?20000000:format==='html'?300000:200000)) throw new Error('Content exceeds the supported document size.');
     let bytes: Buffer;
-    const extension = { text: '.txt', markdown: '.md', pdf: '.pdf', docx: '.docx', quiz: '.quiz' }[format];
+    const extension = { text: '.txt', markdown: '.md', html: '.html', pdf: '.pdf', docx: '.docx', quiz: '.quiz' }[format];
     if (!extension) throw new Error('Unsupported new document format.');
     if (format === 'pdf') {
       const pdf = await PDFDocument.create(), font = await fontFor(pdf);

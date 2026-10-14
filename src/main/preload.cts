@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AppEvent, DesktopAPI, Settings, TranscriptEntry } from '../shared.js';
 const api: DesktopAPI = {
+  updateState: () => ipcRenderer.invoke('voice:updateState'),
+  checkForUpdates: () => ipcRenderer.invoke('voice:checkForUpdates'),
+  downloadUpdate: () => ipcRenderer.invoke('voice:downloadUpdate'),
+  installUpdate: () => ipcRenderer.invoke('voice:installUpdate'),
+  updateDownloads: () => ipcRenderer.invoke('voice:updateDownloads'),
   onWindowActivity: handler => {
     let received = false, disposed = false;
     const listener = (_event: Electron.IpcRendererEvent, active: boolean) => { received = true; handler(active); };
@@ -40,6 +45,7 @@ const api: DesktopAPI = {
   saveChat: chat => ipcRenderer.invoke('voice:saveChat', chat),
   listChats: () => ipcRenderer.invoke('voice:listChats'),
   loadChat: id => ipcRenderer.invoke('voice:loadChat', id),
+  resumeChat: id => ipcRenderer.invoke('voice:resumeChat', id),
   deleteChat: id => ipcRenderer.invoke('voice:deleteChat', id),
   openHelp: () => ipcRenderer.invoke('voice:help'),
   workspace: () => ipcRenderer.invoke('voice:workspace'),

@@ -10,6 +10,7 @@ import { QuizFiles } from '../dist/main/main/quiz-files.js';
 import { ThinkEngine } from '../dist/main/main/think.js';
 import { parseSourceURL, verifySource, isLongMarkdown } from '../dist/main/main/markdown-results.js';
 import { defaultSettings } from '../dist/main/shared.js';
+import { documentPresentationResponse } from '../dist/main/main/presentation-protocol.js';
 protocol.registerSchemesAsPrivileged([{scheme:'codex-presentation',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 app.on('window-all-closed',()=>{});
 async function main() {
@@ -28,7 +29,8 @@ quizFiles=new QuizFiles(quiz,files,error=>errors.push(String(error)));
 const openedQuizSources=[];
 let failQuizSource=false;
 const displayed=[];
-const thinker=new ThinkEngine({},files,()=>defaultSettings,profile,emit,async()=>{},presentation=>displayed.push(presentation),async()=>{});
+let settings={...defaultSettings};
+const thinker=new ThinkEngine({},files,()=>settings,profile,emit,async()=>{},presentation=>displayed.push(presentation),async()=>{});
 thinker.artifacts=artifacts;thinker.state.threadId='test';
 const show=async args=>thinker.executeTool({threadId:'test',tool:'show_text',arguments:args,callId:crypto.randomUUID()});
 win.webContents.on('console-message',(_event,level,message)=>{if(level===3)errors.push(message);});
@@ -36,7 +38,8 @@ const state = () => ({files:files.list(),activeId:files.activeId,artifacts,think
 const handlers = {
   openQuizSource:source=>{if(failQuizSource)throw new Error('Source unavailable');openedQuizSources.push(source);},
   windowActivity:()=>false,
-  status:()=>({connected:true,account:null,models:[],voices:[],voiceAvailable:false,settings:defaultSettings,executable:'',platform:process.platform,darkMode:false}),
+  status:()=>({connected:true,account:null,models:[],voices:[],voiceAvailable:false,settings,executable:'',platform:process.platform,darkMode:false}),
+  updateState:()=>({status:'disabled',currentVersion:'0.0.4'}),
   workspace:state,browserState:()=>null,syncTranscript:()=>{},
   answerQuiz:async input=>{const result=quiz.answer(input);await quizFiles.flush();return result;},setQuizAdaptive:value=>quiz.setAdaptive(value),setQuizMaxQuestions:value=>quiz.setMaxQuestions(value),setQuizMode:value=>quiz.setMode(value),closeQuiz:()=>quiz.closeQuiz(),
   document:id=>files.content(id),documentBytes:id=>files.bytes(id),page:(id,page)=>files.setPage(id,page),
@@ -58,7 +61,7 @@ const clickSwitch = async selector => {
 };
 
 try {
-  await win.webContents.session.protocol.handle('codex-presentation',()=>new Response('<html><body><h1>Interactive practice</h1><button>Try it</button></body></html>',{headers:{'Content-Type':'text/html'}}));
+  await win.webContents.session.protocol.handle('codex-presentation',request=>documentPresentationResponse(files,request)??new Response('<html><body><h1>Interactive practice</h1><button>Try it</button></body></html>',{headers:{'Content-Type':'text/html'}}));
   await win.loadFile(path.resolve('dist/renderer/index.html'));
   await wait(`!!document.querySelector('.account.signed-out')`);
   await wait(`document.documentElement.dataset.renderActive==='false'`);
@@ -208,7 +211,8 @@ try {
   assert.equal(isLongMarkdown('word '.repeat(401)),true);
   assert.equal(isLongMarkdown('x'.repeat(3001)),true);
   await show({title:'Quick note',markdown:'Energy is conserved.'});
-  assert.equal(displayed.at(-1).placement,'popup');assert.equal(files.activeId,source.id);
+  assert.equal(displayed.at(-1).placement,'side');assert.equal(files.activeId,source.id);
+  await wait(`document.querySelector('.floating-card .presentation-text')?.textContent.includes('Energy is conserved.')`);
   await assert.rejects(show({title:'Missing citations',markdown:'Energy '.repeat(450)}),/source passages/);
   await assert.rejects(show({title:'Bad citation',markdown:'Energy '.repeat(450),sources:[{...reference,quote:'An invented passage'}]}),/not found/);
   await show({title:'Detailed explanation',markdown:'# Energy explained\n\n'+'Energy is conserved. '.repeat(160),sources:[reference]});
@@ -224,12 +228,45 @@ try {
   const pdf=await files.create('PDF source','pdf','Energy is conserved.');
   assert.equal(verifySource(files,{fileId:pdf.id,label:'Energy',page:1}).page,1);
   assert.throws(()=>verifySource(files,{fileId:pdf.id,label:'Energy',page:2}),/existing PDF page/);
+  settings={...settings,demoPlacement:'file'};
+  const artifactCount=artifacts.length;
+  await show({title:'Sidebar note',markdown:'# Sidebar note\n\nA short explanation.',sources:[{fileId:pdf.id,label:'Energy',page:1}]});
+  const note=files.get(files.activeId).info;
+  assert.equal(note.kind,'markdown');assert.equal(note.name,'Sidebar note.md');
+  await wait(`document.querySelector('.document-paper h1')?.textContent==='Sidebar note'`);
+  assert.equal(await js(`!![...document.querySelectorAll('.file-list .file-text strong')].find(item=>item.textContent==='Sidebar note.md')`),true);
+  await thinker.executeTool({threadId:'test',tool:'show_demo',callId:crypto.randomUUID(),arguments:{title:'Sidebar demo',html:'<!doctype html><html><head><style>body{padding:32px}button{padding:12px}</style></head><body><h1>Sidebar demo</h1><button onclick="this.textContent=\'Clicked\'">Try it</button></body></html>'}});
+  const demoFile=files.get(files.activeId).info;
+  assert.equal(demoFile.kind,'html');assert.equal(demoFile.name,'Sidebar demo.html');
+  assert.equal(artifacts.length,artifactCount,'File mode must use the file list rather than presentation artifacts');
+  await wait(`!!document.querySelector('.document-demo') && document.querySelectorAll('.floating-card').length===0`);
+  assert.equal(await js(`document.querySelector('.document-demo').getAttribute('sandbox')`),'allow-scripts');
+  const frame=()=>win.webContents.mainFrame.frames.find(frame=>frame.url.includes(demoFile.id+'/document'));
+  for(let i=0;i<50&&!frame();i++)await new Promise(resolve=>setTimeout(resolve,100));
+  assert.ok(frame());
+  assert.equal(await frame().executeJavaScript(`document.querySelector('h1').textContent`),'Sidebar demo');
+  assert.equal(await frame().executeJavaScript(`document.querySelector('button').click();document.querySelector('button').textContent`),'Clicked');
+  assert.equal(await frame().executeJavaScript(`typeof window.desktop`),'undefined');
+  const response=documentPresentationResponse(files,new Request(`codex-presentation://${demoFile.id}/document`));
+  assert.match(response.headers.get('Content-Security-Policy'),/connect-src 'none'/);
+  assert.equal(documentPresentationResponse(files,new Request(`codex-presentation://${note.id}/document`)).status,404);
+  assert.equal(documentPresentationResponse(files,new Request('codex-presentation://missing/document')).status,404);
+  await handlers.selectFile(note.id);await wait(`document.querySelector('.document-paper h1')?.textContent==='Sidebar note'`);
+  await handlers.selectFile(demoFile.id);await wait(`!!document.querySelector('.document-demo')`);
+  win.webContents.invalidate();await new Promise(resolve=>setTimeout(resolve,500));
+  await writeFile(path.join(os.tmpdir(),'codex-sidebar-demo.png'),(await win.webContents.capturePage()).toPNG());
+  await show({title:'Explicit card',markdown:'Keep this one floating.',placement:'side'});
+  await wait(`document.querySelector('.floating-card .presentation-text')?.textContent.includes('Keep this one floating.')`);
+  assert.equal(files.activeId,demoFile.id,'Explicit placement overrides the file preference');
   const reloaded=new DocumentStore(path.join(profile,'files'),()=>{});await reloaded.initialize();
+  assert.equal(reloaded.get(demoFile.id).info.kind,'html');assert.equal(reloaded.activeId,demoFile.id);
+  assert.equal(reloaded.content(demoFile.id).text,files.content(demoFile.id).text);
+  assert.equal(reloaded.get(note.id).info.kind,'markdown');
   const savedQuiz=reloaded.list().find(file=>file.id===quizFile.id);assert.ok(!savedQuiz,'Closed quiz must stay closed in the working list');
   await reloaded.open([savedPath]);const restored=quiz.restoreFile(reloaded.content(reloaded.activeId).text);
   assert.equal(restored.quiz.stats.accuracy,100);
   assert.deepEqual(errors,[]);
-  console.log('PASS: interactive quiz files, saved progress and reopen, short Markdown popup default, long Markdown file default, verified text links and PDF pages, invalid-source rejection, and floating demonstration controls.');
+  console.log('PASS: floating defaults, Markdown and interactive HTML sidebar files, isolated interaction, file switching and persistence, explicit placement overrides, source links, and quiz controls.');
 } catch(error) {console.error(error,errors);process.exitCode=1;}
 finally {quiz.shutdown();win.destroy();await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:200});app.exit(process.exitCode||0);}
 

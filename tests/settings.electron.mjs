@@ -10,6 +10,7 @@ let settings={...defaultSettings}, active=0, peak=0, fail=false;
 const history=[];
 const handlers={windowActivity:()=>true,status:()=>({connected:true,account:null,models:[{model:'quiz-model',displayName:'Quiz model',isDefault:false}],voices:[],voiceAvailable:false,settings,platform:process.platform,darkMode:false}),workspace:()=>({files:[],activeId:null,artifacts:[],thinking:{tokens:0},annotations:{overlays:[],highlights:[],pointer:null},quiz:{}}),browserState:()=>null,stop:()=>{},interrupt:()=>{},saveChat:()=>{},syncTranscript:()=>{},settings:async next=>{peak=Math.max(peak,++active);await new Promise(r=>setTimeout(r,80));active--;if(fail){fail=false;throw Error('Test save failure');}settings={...next};history.push(settings);return settings;}};
 for(const [name,fn] of Object.entries(handlers))ipcMain.handle(`voice:${name}`,(_,...args)=>fn(...args));
+ipcMain.handle('voice:updateState',()=>({status:'disabled',currentVersion:'0.0.4',message:'Test build'}));
 const win=new BrowserWindow({width:1100,height:900,show:false,webPreferences:{preload:path.resolve('dist/main/main/preload.cjs'),contextIsolation:true,sandbox:true,offscreen:true}});
 const js=source=>win.webContents.executeJavaScript(source);
 const wait=async source=>{for(let i=0;i<100;i++){if(await js(source))return;await new Promise(r=>setTimeout(r,30));}throw Error('Timeout: '+source);};
@@ -67,10 +68,18 @@ try{
  await wait(`document.querySelector('.settings-dialog:last-of-type').open`);
  assert.equal(await js(`document.querySelector('[name="quizEffort"]').value`),'high');
  assert.equal(await js(`document.querySelector('[name="quizModel"]').value`),'quiz-model');
- await js(`document.querySelector('[name="quizModel"]').scrollIntoView({block:'center'})`);
+ await js(`(()=>{const input=document.querySelector('[name="demoPlacement"]');input.value='file';input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+ await wait(`document.querySelector('.dialog-footer [role="status"]').textContent==='Changes save automatically' && document.querySelector('[name="demoPlacement"]').value==='file'`);
+ assert.equal(settings.demoPlacement,'file');
+ await js(`${button('Done')}.click()`);
+ await wait(`!document.querySelector('.settings-dialog:last-of-type').open`);
+ await js(`document.querySelector('[title="Preferences"]').click()`);
+ await wait(`document.querySelector('.settings-dialog:last-of-type').open`);
+ assert.equal(await js(`document.querySelector('[name="demoPlacement"]').value`),'file');
+ await js(`document.querySelector('[name="demoPlacement"]').scrollIntoView({block:'center'})`);
  win.webContents.invalidate();await new Promise(r=>setTimeout(r,200));
  await writeFile('/tmp/eduagent-settings.png',(await win.webContents.capturePage()).toPNG());
- console.log('PASS: immediate saves, serial writes, Undo during saving, Done, fresh reopening baseline, failure and retry, independent generator effort.');
+ console.log('PASS: immediate saves, serial writes, Undo during saving, Done, failure and retry, independent generator effort, sidebar file preference and reopening.');
 } catch(e){console.error(e);process.exitCode=1;}finally{win.destroy();app.exit(process.exitCode||0);}
 
 }

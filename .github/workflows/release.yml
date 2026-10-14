@@ -1,0 +1,95 @@
+name: Prepare desktop release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  packages:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: mac
+            arch: '--arm64 --x64'
+          - runner: windows-latest
+            platform: win
+            arch: '--x64'
+          - runner: ubuntu-latest
+            platform: linux
+            arch: '--x64'
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Validate release version
+        shell: bash
+        run: |
+          node --input-type=module -e 'import p from "./package.json" with {type:"json"}; if (!/^v\d+\.\d+\.\d+$/.test(process.env.GITHUB_REF_NAME) || process.env.GITHUB_REF_NAME !== `v${p.version}`) throw Error("Run on a stable v<package.json version> tag.");'
+      - run: npm test
+      - name: Configure macOS signing
+        if: matrix.platform == 'mac'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: |
+          if [ -n "$CSC_LINK" ]; then
+            test -n "$CSC_KEY_PASSWORD" || { echo 'Set MAC_CSC_KEY_PASSWORD for the configured signing certificate.'; exit 1; }
+            echo 'MAC_SIGNING_ARGS=--config.forceCodeSigning=true' >> "$GITHUB_ENV"
+          else
+            echo 'MAC_SIGNING_ARGS=' >> "$GITHUB_ENV"
+            echo 'macOS packages will be unsigned and require manual installation.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Build update packages and manifests
+        run: npm run dist:${{ matrix.platform }} -- ${{ matrix.arch }} ${{ env.MAC_SIGNING_ARGS }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_LINK: ${{ matrix.platform == 'mac' && secrets.MAC_CSC_LINK || secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.MAC_CSC_KEY_PASSWORD || secrets.WIN_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Omit update manifest for unsigned macOS packages
+        if: matrix.platform == 'mac'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+        run: |
+          if [ -z "$CSC_LINK" ]; then rm -f release/latest-mac.yml; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: update-${{ matrix.platform }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.yml
+            release/*.blockmap
+            !release/builder-*.yml
+  draft:
+    needs: packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: update-*
+          path: packages
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: packages/*

@@ -14,7 +14,7 @@ export interface Settings {
   theme: 'system' | 'light' | 'dark';
   /** Use a prerecorded microphone orb loop instead of live gradient animation. */
   lowPowerMode: boolean;
-  demoPlacement: 'side' | 'popup';
+  demoPlacement: 'side' | 'popup' | 'file';
   autoCompact: boolean;
   compactAtTokens: number;
   agentTools: boolean;
@@ -63,6 +63,14 @@ export interface Status {
   darkMode: boolean;
 }
 export interface AppEvent { method: string; params: Record<string, unknown> }
+export interface UpdateState {
+  status: 'disabled' | 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'up-to-date' | 'error';
+  currentVersion: string;
+  version?: string;
+  percent?: number;
+  message?: string;
+  retry?: 'check' | 'download' | 'install';
+}
 export interface TranscriptEntry { id: string; role: 'user' | 'assistant'; text: string; time: number; final: boolean }
 /** A saved chat. `think` holds Think's side of the conversation, kept apart as in the live timeline. */
 export interface SavedChat { id: string; title: string; created: number; updated: number; entries: TranscriptEntry[]; think: TranscriptEntry[] }
@@ -89,6 +97,11 @@ export interface WorkspaceState { files: DocumentInfo[]; activeId: string | null
 export interface DebugLog { id: string; time: number; agent: 'voice' | 'bridge' | 'think' | 'app'; kind: 'tool' | 'route' | 'event' | 'error'; label: string; detail?: string; model?: string; status?: 'running' | 'completed' | 'failed'; ms?: number }
 export interface ToolActivity { id: string; name: string; status: 'running' | 'completed' | 'failed'; detail: string; time: number }
 export interface DesktopAPI {
+  updateState(): Promise<UpdateState>;
+  checkForUpdates(): Promise<UpdateState>;
+  downloadUpdate(): Promise<UpdateState>;
+  installUpdate(): Promise<UpdateState>;
+  updateDownloads(): Promise<void>;
   onWindowActivity(handler: (active: boolean) => void): () => void;
   browserState(): Promise<BrowserState>;
   browserOpen(url?: string): Promise<BrowserState>;
@@ -122,6 +135,7 @@ export interface DesktopAPI {
   saveChat(chat: SavedChat): Promise<void>;
   listChats(): Promise<ChatSummary[]>;
   loadChat(id: string): Promise<SavedChat>;
+  resumeChat(id: string): Promise<SavedChat>;
   deleteChat(id: string): Promise<void>;
   openHelp(): Promise<void>;
   onEvent(handler: (event: AppEvent) => void): () => void;

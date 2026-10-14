@@ -1,7 +1,7 @@
 import BrowserPanel from './BrowserPanel';
 import type { BrowserState } from '../browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { defaultSettings, type AppEvent, type DesktopAPI, type DocumentInfo, type DocumentSource, type Settings, type Status, type TranscriptEntry, type WorkspaceState, type ToolActivity, type PDFToolRequest, type DebugLog, type SavedChat, type ChatSummary } from '../shared';
+import { defaultSettings, type AppEvent, type DesktopAPI, type DocumentInfo, type DocumentSource, type Settings, type Status, type TranscriptEntry, type WorkspaceState, type ToolActivity, type PDFToolRequest, type DebugLog, type ChatSummary } from '../shared';
 import { VoiceSession, type LiveEvent } from './voice';
 import { CaptionGroups, EchoFilter } from './voice-input';
 import { pointerContext } from './pointer-context';
@@ -17,6 +17,7 @@ import { executePDFViewTool } from './pdf-view-tools';
 import ResizeHandle, { readPaneSizes, writePaneSizes, type PaneSizes } from './ResizeHandle';
 import { isRenderActive } from './render-activity';
 import { LowPowerContext } from './LowPowerContext';
+import { useAppUpdates, UpdateControls } from './AppUpdates';
 declare global { interface Window { desktop?: DesktopAPI } }
 type Phase = 'idle' | 'starting' | 'listening' | 'thinking' | 'speaking' | 'standby';
 const errorMessage = (error: unknown) => error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : String(error);
@@ -57,13 +58,21 @@ export default function App() {
   const logBuffer=useRef<DebugLog[]>([]);
   const [logs,setLogs]=useState<DebugLog[]>([]);
   const toggleLogs=(on:boolean)=>{setLogsOn(on);if(on)setLogs(logBuffer.current.slice());try{localStorage.setItem(LOGS_KEY,on?'1':'0');}catch{}};
-  const [thinkMessages,setThinkMessages]=useState<TranscriptEntry[]>([]);
-  const thinkMessagesRef=useRef(thinkMessages);thinkMessagesRef.current=thinkMessages;
+  const [thinkMessages,setThinkMessagesState]=useState<TranscriptEntry[]>([]);
+  const thinkMessagesRef=useRef<TranscriptEntry[]>([]);
+  const setThinkMessages=useCallback((update:TranscriptEntry[]|((old:TranscriptEntry[])=>TranscriptEntry[]))=>{
+    const next=typeof update==='function'?update(thinkMessagesRef.current):update;
+    thinkMessagesRef.current=next;setThinkMessagesState(next);
+  },[]);
   // Every chat is saved as it goes, so starting a new one never loses the old one.
-  const chat=useRef({id:crypto.randomUUID(),created:Date.now()});
+  const chat=useRef<{id:string;created:number}>({id:crypto.randomUUID(),created:Date.now()});
   const [historyOpen,setHistoryOpen]=useState(false);
+  const [historyLoading,setHistoryLoading]=useState(false);
   const [pastChats,setPastChats]=useState<ChatSummary[]>([]);
-  const [viewingChat,setViewingChat]=useState<SavedChat|null>(null);
+  const [switchingChat,setSwitchingChat]=useState(false);
+  const switchingChatRef=useRef(false);
+  const [historyError,setHistoryError]=useState('');
+  const chatSaveQueue=useRef<Promise<void>>(Promise.resolve());
   const historyRef=useRef<HTMLDialogElement>(null);
   const [activities,setActivities]=useState<ToolActivity[]>([]);
   const [thinkJob,setThinkJob]=useState<ThinkJob|null>(null);
@@ -92,8 +101,12 @@ export default function App() {
     visualLevel.current = next;
     voiceStage.current?.style.setProperty('--level', String(next));
   }, []);
-  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
-  const entriesRef=useRef(entries);entriesRef.current=entries;
+  const [entries, setEntriesState] = useState<TranscriptEntry[]>([]);
+  const entriesRef=useRef<TranscriptEntry[]>([]);
+  const setEntries=useCallback((update:TranscriptEntry[]|((old:TranscriptEntry[])=>TranscriptEntry[]))=>{
+    const next=typeof update==='function'?update(entriesRef.current):update;
+    entriesRef.current=next;setEntriesState(next);
+  },[]);
   const [input, setInput] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -179,7 +192,7 @@ export default function App() {
     }
   }, [changePhase, endSession]);
   const startSession = useCallback(async () => {
-    if (call.current) return;
+    if (call.current || switchingChatRef.current) return;
     const token = ++operation.current;
     setError(''); changePhase('starting'); sessionRef.current = true; setSessionOn(true);
     mutedRef.current = false; setMuted(false); lastOutput.current = 0; groups.current.reset();
@@ -214,7 +227,7 @@ export default function App() {
     }
   }, [status, handleLive, changePhase, endSession, showLevel]);
   const send = useCallback(async (raw: string) => {
-    if (typedPending.current) return;
+    if (typedPending.current || switchingChatRef.current) return;
     const message=raw.trim();typedPending.current=true;setBackendBusy(true);setError('');
     const next=message?[...entriesRef.current,{id:crypto.randomUUID(),role:'user' as const,text:message,time:Date.now(),final:true}]:entriesRef.current;
     if(message){entriesRef.current=next;setEntries(next);setInput('');}
@@ -223,13 +236,26 @@ export default function App() {
     finally{typedPending.current=false;setBackendBusy(false);}
   }, []);
   useEffect(()=>{const report=(event:Event)=>setError((event as CustomEvent<string>).detail);window.addEventListener('document-link-error',report);return()=>window.removeEventListener('document-link-error',report);},[]);
-  useEffect(()=>{const timer=setTimeout(()=>{void api().syncTranscript(entries,sessionOn).catch(e=>setError(errorMessage(e)));},180);return()=>clearTimeout(timer);},[entries,sessionOn]);
+  useEffect(()=>{if(switchingChat)return;const timer=setTimeout(()=>{if(!switchingChatRef.current)void api().syncTranscript(entries,sessionOn).catch(e=>setError(errorMessage(e)));},180);return()=>clearTimeout(timer);},[entries,sessionOn,switchingChat]);
   const saveChat=useCallback(async()=>{
     const entries=entriesRef.current,think=thinkMessagesRef.current;
     if(!entries.length&&!think.length)return;
-    await api().saveChat({...chat.current,title:chatTitle(entries,think),updated:Date.now(),entries,think});
+    const snapshot={...chat.current,title:chatTitle(entries,think),updated:Date.now(),entries,think};
+    const saved=chatSaveQueue.current.catch(()=>{}).then(()=>api().saveChat(snapshot));
+    chatSaveQueue.current=saved;
+    await saved;
   },[]);
-  useEffect(()=>{const timer=setTimeout(()=>{void saveChat().catch(e=>setError(errorMessage(e)));},800);return()=>clearTimeout(timer);},[entries,thinkMessages,saveChat]);
+  const appUpdates = useAppUpdates(async () => {
+    if (sessionRef.current) throw new Error('End voice before restarting to install.');
+    if (backendWorking.current || typedPending.current || workspaceRef.current?.thinking.compacting) throw new Error('Wait for the current work to finish before restarting.');
+    if (input.trim()) throw new Error('Send or clear your message before restarting.');
+    if (document.querySelector('.text-editor textarea')) throw new Error('Apply your document changes before restarting.');
+    await closeSettings();
+    if (settingsErrorRef.current) throw new Error('Save your preferences before restarting.');
+    await flushTeX();
+    await saveChat();
+  });
+  useEffect(()=>{if(switchingChat)return;const timer=setTimeout(()=>{if(!switchingChatRef.current)void saveChat().catch(e=>setError(errorMessage(e)));},800);return()=>clearTimeout(timer);},[entries,thinkMessages,saveChat,switchingChat]);
   useEffect(()=>{const save=()=>void saveChat().catch(()=>{});window.addEventListener('beforeunload',save);return()=>window.removeEventListener('beforeunload',save);},[saveChat]);
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(()=>{if(!notice)return;const timer=setTimeout(()=>setNotice(''),6000);return()=>clearTimeout(timer);},[notice]);
@@ -240,6 +266,7 @@ export default function App() {
       switch (event.method) {
         case 'browser/state': { const state=p.state as unknown as BrowserState;setBrowserState(state);if(state.tabs.length>browserCount.current)void flushTeX().then(()=>setBrowserVisible(true)).catch(e=>setError(errorMessage(e)));browserCount.current=state.tabs.length;break; }
         case 'workspace/changed':setWorkspace(p.workspace as unknown as WorkspaceState);break;
+        case 'workspace/fileShown':setBrowserVisible(false);setPresentationId(null);break;
         case 'workspace/annotations':setWorkspace(old=>old?{...old,annotations:p.annotations as unknown as WorkspaceState['annotations']}:old);break;
         case 'document/source':setSourceTarget(p.source as unknown as DocumentSource);setBrowserVisible(false);break;
         case 'quiz/state':setWorkspace(old=>old?{...old,quiz:p.state as unknown as WorkspaceState['quiz']}:old);break;
@@ -348,16 +375,40 @@ export default function App() {
   }, [endSession, startSession]);
   // Debug logs carry over: they record what the app did, not one chat's content.
   const newChat = useCallback(async () => {
-    await endSession();
-    try { await saveChat(); await api().newConversation(); chat.current={id:crypto.randomUUID(),created:Date.now()}; setEntries([]);entriesRef.current=[];setThinkMessages([]);thinkMessagesRef.current=[];setActivities([]);setThinkJob(null);setPresentationId(null); segments.current.clear(); echo.current.clear(); groups.current.reset(); setNotice(''); setError('');setWorkspace(await api().workspace()); }
+    if(switchingChatRef.current)return;
+    switchingChatRef.current=true;setSwitchingChat(true);
+    try { await endSession(); await saveChat(); await api().newConversation(); let saveError='';await saveChat().catch(e=>{saveError=errorMessage(e);}); chat.current={id:crypto.randomUUID(),created:Date.now()}; setEntries([]);entriesRef.current=[];setThinkMessages([]);thinkMessagesRef.current=[];setActivities([]);setThinkJob(null);setPresentationId(null);setInput(''); segments.current.clear(); echo.current.clear(); groups.current.reset(); setNotice(''); setError(saveError);setWorkspace(await api().workspace()); }
     catch (e) { setError(errorMessage(e)); }
+    finally {switchingChatRef.current=false;setSwitchingChat(false);}
   }, [endSession, saveChat]);
   const openHistory=useCallback(async()=>{
-    setViewingChat(null);setHistoryOpen(true);
-    try{await saveChat();setPastChats(await api().listChats());}catch(e){setError(errorMessage(e));}
+    setHistoryError('');setHistoryLoading(true);setHistoryOpen(true);
+    try{await saveChat();setPastChats(await api().listChats());}catch(e){setHistoryError(errorMessage(e));}
+    finally{setHistoryLoading(false);}
   },[saveChat]);
-  const viewChat=(id:string)=>void api().loadChat(id).then(setViewingChat).catch(e=>setError(errorMessage(e)));
-  const deleteChat=(id:string)=>void api().deleteChat(id).then(()=>{setPastChats(old=>old.filter(item=>item.id!==id));setViewingChat(old=>old?.id===id?null:old);}).catch(e=>setError(errorMessage(e)));
+  const resumeChat=async(id:string)=>{
+    if(switchingChatRef.current||historyLoading)return;
+    if(id===chat.current.id){setHistoryOpen(false);requestAnimationFrame(()=>document.getElementById('message')?.focus());return;}
+    switchingChatRef.current=true;setSwitchingChat(true);setHistoryError('');
+    try {
+      await endSession();
+      // Preserve the current chat before asking the backend to switch contexts.
+      await saveChat();
+      const saved=await api().resumeChat(id);
+      // Capture any final reply received while the backend was stopping.
+      let saveError='';await saveChat().catch(e=>{saveError=errorMessage(e);});
+      chat.current={id:saved.id,created:saved.created};
+      entriesRef.current=saved.entries;setEntries(saved.entries);
+      thinkMessagesRef.current=saved.think;setThinkMessages(saved.think);
+      setActivities([]);setThinkJob(null);setPresentationId(null);setInput('');
+      segments.current.clear();echo.current.clear();groups.current.reset();
+      setNotice('');setError(saveError);setHistoryOpen(false);
+      setWorkspace(await api().workspace());
+      requestAnimationFrame(()=>document.getElementById('message')?.focus());
+    }catch(e){setHistoryError(errorMessage(e));}
+    finally{switchingChatRef.current=false;setSwitchingChat(false);}
+  };
+  const deleteChat=(id:string)=>void api().deleteChat(id).then(()=>setPastChats(old=>old.filter(item=>item.id!==id))).catch(e=>setHistoryError(errorMessage(e)));
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
@@ -477,7 +528,7 @@ export default function App() {
           <div className="artifact-list">{workspace.artifacts.map(item=><button key={item.id} className={presentationId===item.id?'active':''} onClick={()=>{void api().present(item.id,item.placement).catch(e=>setError(errorMessage(e)));}}><span className="artifact-icon"><Icon name={item.kind==='demo'?'panel':'file'} size={14}/></span><span>{item.title}</span></button>)}</div>
         </div>}
         <div className="rail-bottom">
-          <button className="rail-action" onClick={()=>void newChat()}><Icon name="plus" size={15}/>New conversation</button>
+          <button className="rail-action" disabled={switchingChat} onClick={()=>void newChat()}><Icon name="plus" size={15}/>New conversation</button>
           <div className={`account ${accountState}`}>
             <button className="account-settings" title="Open settings" aria-label={`${accountLabel}. Open settings`} aria-haspopup="dialog" onClick={openSettings}>
               <strong title={status?.account?.email} aria-live="polite">{accountLabel}</strong>
@@ -490,13 +541,14 @@ export default function App() {
       <main className="stage document-column">
         {!browserVisible&&!activeFile&&<div className="stage-top drag" aria-hidden="true"/>}
         <div className="sheet">
-          {browserVisible?<BrowserPanel state={browserState} blocked={settingsOpen||dropActive||!!presentation||!!error||!!notice||!!status?.warning} onError={setError}/>:activeFile?activeFile.kind==='quiz'?<QuizDocument file={activeFile} state={workspace!.quiz} onClose={()=>closeFile(activeFile.id)} onError={setError}/>:activeFile.kind==='tex'?<GlassTeXEditor key={activeFile.id} file={activeFile} sourceTarget={sourceTarget} sidebar={texSidebar} onError={setError} onOpenFiles={()=>void openFiles()}/>:<DocumentViewer key={activeFile.id} file={activeFile} darkMode={status?.darkMode??false} source={sourceTarget} onError={setError} annotations={workspace!.annotations} voice={{tone,label:buttonLabel,disabled:!sessionOn&&(!signedIn||!status?.voiceAvailable||loading),onClick:()=>void primary().catch(e=>setError(errorMessage(e))),onVisible:setPointerVisible}}/>:<div className="welcome">
+          {browserVisible?<BrowserPanel state={browserState} blocked={settingsOpen||historyOpen||dropActive||!!presentation||!!error||!!notice||!!status?.warning||appUpdates.visible} onError={setError}/>:activeFile?activeFile.kind==='quiz'?<QuizDocument file={activeFile} state={workspace!.quiz} onClose={()=>closeFile(activeFile.id)} onError={setError}/>:activeFile.kind==='tex'?<GlassTeXEditor key={activeFile.id} file={activeFile} sourceTarget={sourceTarget} sidebar={texSidebar} onError={setError} onOpenFiles={()=>void openFiles()}/>:<DocumentViewer key={activeFile.id} file={activeFile} darkMode={status?.darkMode??false} source={sourceTarget} onError={setError} annotations={workspace!.annotations} voice={{tone,label:buttonLabel,disabled:!sessionOn&&(!signedIn||!status?.voiceAvailable||loading),onClick:()=>void primary().catch(e=>setError(errorMessage(e))),onVisible:setPointerVisible}}/>:<div className="welcome">
             <div className="welcome-inner">
               <h1>Open something.<br/><mark>Talk it through.</mark></h1>
               <div className="welcome-actions"><button className="button-primary" onClick={()=>void openFiles()} disabled={opening}><Icon name="folder" size={16}/>Open a file</button></div>
             </div>
           </div>}
           {(error||notice||status?.warning)&&<div className={`toast ${error?'error':''}`} role={error?'alert':'status'}><i/><span>{error||notice||status?.warning}</span><button className="icon-button" aria-label="Dismiss" onClick={()=>{setError('');setNotice('');setStatus(old=>old?{...old,warning:undefined}:old);}}><Icon name="close" size={13}/></button></div>}
+          {!error&&!notice&&!status?.warning&&appUpdates.visible&&<UpdateControls updates={appUpdates} toast/>}
         </div>
       </main>
 
@@ -514,7 +566,7 @@ export default function App() {
         <div className="rail-top drag"><span/><button className="icon-button" title="Preferences" onClick={openSettings}><Icon name="settings" size={16}/></button></div>
         <div ref={voiceStage} className={`voice-stage ${phase} ${live?'live':''} ${muted?'muted':''}`} title={caption[phase]}>
           <div className={`orb-wrap ${spitting?'spitting':''}`}>
-          <button className={`mic-button ${tone} ${pointerVisible?'pointing-on-page':''}`} data-tone={tone} title={pointerVisible?'Voice dot is pointing on the PDF':buttonLabel} aria-label={buttonLabel} aria-pressed={sessionOn} disabled={!sessionOn&&(!signedIn||!status?.voiceAvailable||loading)} onClick={()=>void primary().catch(e=>setError(errorMessage(e)))}>
+          <button className={`mic-button ${tone} ${pointerVisible?'pointing-on-page':''}`} data-tone={tone} title={pointerVisible?'Voice dot is pointing on the PDF':buttonLabel} aria-label={buttonLabel} aria-pressed={sessionOn} disabled={switchingChat||!sessionOn&&(!signedIn||!status?.voiceAvailable||loading)} onClick={()=>void primary().catch(e=>setError(errorMessage(e)))}>
             <span className="halo orb-glow" aria-hidden="true"/>
             <span className="face" aria-hidden="true"><Orb tone={tone}/><VoiceGlyph tone={tone} muted={sessionOn&&muted} size={30}/></span>
           </button>
@@ -530,7 +582,7 @@ export default function App() {
           <label className="logs-toggle" title="Show debug logs: tool calls, the route each took, and which model ran it"><input type="checkbox" checked={logsOn} onChange={event=>toggleLogs(event.target.checked)}/><span>Logs</span>{logsOn&&!!logs.length&&<small>{logs.length}</small>}</label>
           <div>
             {thinking?.busy&&<button className="icon-button" title="Stop Think" onClick={()=>void api().cancelThink().catch(e=>setError(errorMessage(e)))}><Icon name="stop" size={14}/></button>}
-            <button className="icon-button" title={`New chat (${mod}N)`} disabled={!hasMessages} onClick={()=>void newChat()}><Icon name="new-chat" size={15}/></button>
+            <button className="icon-button" title={`New chat (${mod}N)`} disabled={switchingChat||!hasMessages} onClick={()=>void newChat()}><Icon name="new-chat" size={15}/></button>
             <button className="icon-button" title="Compact Think context" disabled={!signedIn||thinking?.compacting} onClick={()=>void api().compact().catch(e=>setError(errorMessage(e)))}><Icon name="compact" size={15}/></button>
             <button className="icon-button" title="Past chats" onClick={()=>void openHistory()}><Icon name="history" size={15}/></button>
             <button className="icon-button" title="Export voice transcript" disabled={!entries.length} onClick={()=>void api().exportTranscript(entries).catch(e=>setError(errorMessage(e)))}><Icon name="export" size={15}/></button>
@@ -544,10 +596,10 @@ export default function App() {
         <div className={`context-meter ${contextPercent>80?'high':''}`} title={`Context ${((thinking?.tokens??0)/1000).toFixed(1)}k of ${(draft.compactAtTokens/1000).toFixed(0)}k`}><i><b style={{width:`${contextPercent}%`}}/></i></div>
         <form className="composer" onSubmit={event=>{event.preventDefault();void send(input);}}>
           <label className="visually-hidden" htmlFor="message">Optional message for Think</label>
-          <textarea id="message" rows={2} placeholder="Ask Think…" value={input} maxLength={32000} onChange={event=>setInput(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();if(signedIn&&!backendBusy)void send(input);}}}/>
+          <textarea id="message" rows={2} placeholder="Ask Think…" value={input} maxLength={32000} onChange={event=>setInput(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();if(signedIn&&!backendBusy&&!switchingChat)void send(input);}}}/>
           <div className="composer-foot">
             <span className="context-chip" title={activeFile?.name}>{activeFile&&<><Icon name="file" size={12}/>{activeFile.name}</>}</span>
-            <button type="submit" className="think-button" disabled={!signedIn||backendBusy||(thinking?.queued??0)>=8}><Icon name="brain" size={14}/>{backendBusy?'Sending…':'Think'}<kbd>↵</kbd></button>
+            <button type="submit" className="think-button" disabled={switchingChat||!signedIn||backendBusy||(thinking?.queued??0)>=8}><Icon name="brain" size={14}/>{backendBusy?'Sending…':'Think'}<kbd>↵</kbd></button>
           </div>
         </form>
       </section>
@@ -555,28 +607,28 @@ export default function App() {
 
     {dropActive&&<div className="drop-overlay"><span className="drop-icon"><Icon name="folder" size={28}/></span><h2>Drop to open</h2></div>}
 
-    <dialog ref={historyRef} className="settings-dialog history-dialog" onCancel={()=>setHistoryOpen(false)}>
+    <dialog ref={historyRef} className="settings-dialog history-dialog" aria-busy={switchingChat||historyLoading} onCancel={event=>{if(switchingChatRef.current)event.preventDefault();else setHistoryOpen(false);}}>
       <header className="dialog-header">
-        <div className="history-title">{viewingChat&&<button className="icon-button" title="All chats" onClick={()=>setViewingChat(null)}><Icon name="left" size={18}/></button>}<h2>{viewingChat?viewingChat.title:'Past chats'}</h2></div>
+        <div className="history-title"><h2>Past chats</h2></div>
         <div>
-          {viewingChat&&<button className="icon-button" title="Delete this chat" onClick={()=>deleteChat(viewingChat.id)}><Icon name="trash" size={17}/></button>}
-          <button className="icon-button" title="Close past chats" onClick={()=>setHistoryOpen(false)}><Icon name="close" size={18}/></button>
+          <button className="icon-button" title="Close past chats" disabled={switchingChat} onClick={()=>setHistoryOpen(false)}><Icon name="close" size={18}/></button>
         </div>
       </header>
-      {viewingChat?<div className="history-transcript">
-        <p className="history-meta">{chatDate(viewingChat.created)}</p>
-        {chatMessages(viewingChat.entries,viewingChat.think).map(item=><Message key={item.entry.id} entry={{...item.entry,final:true}} source={item.source}/>)}
-      </div>:<div className="history-list">
+      {historyError&&<p className="dialog-error" role="alert">{historyError}</p>}
+      {historyLoading&&<p className="settings-intro" role="status">Loading chats…</p>}
+      {switchingChat&&<p className="settings-intro" role="status">Opening chat…</p>}
+      <div className="history-list">
         {!pastChats.length&&<p className="settings-intro">No past chats yet. Chats are saved here as you go.</p>}
         {pastChats.map(item=><div className={`history-row ${item.id===chat.current.id?'current':''}`} key={item.id}>
-          <button className="history-open" onClick={()=>viewChat(item.id)}><strong>{item.title}</strong><small>{chatDate(item.updated)} · {item.count} {item.count===1?'message':'messages'}{item.id===chat.current.id?' · current':''}</small></button>
-          <button className="icon-button" title="Delete chat" aria-label={`Delete ${item.title}`} onClick={()=>deleteChat(item.id)}><Icon name="trash" size={14}/></button>
+          <button className="history-open" disabled={switchingChat||historyLoading} onClick={()=>void resumeChat(item.id)}><strong>{item.title}</strong><small>{chatDate(item.updated)} · {item.count} {item.count===1?'message':'messages'}{item.id===chat.current.id?' · current':''}</small></button>
+          <button className="icon-button" title="Delete chat" disabled={switchingChat||historyLoading} aria-label={`Delete ${item.title}`} onClick={()=>deleteChat(item.id)}><Icon name="trash" size={14}/></button>
         </div>)}
-      </div>}
+      </div>
     </dialog>
 
     <dialog ref={dialogRef} className="settings-dialog" onCancel={event=>{event.preventDefault();void closeSettings();}}>
       <header className="dialog-header"><h2>Preferences</h2><button className="icon-button" title="Close preferences" onClick={()=>void closeSettings()}><Icon name="close" size={18}/></button></header>
+      <section className="settings-section"><h3>Updates</h3><UpdateControls updates={appUpdates}/></section>
       <section className="settings-section"><h3>Window</h3>
         <div className="material-picker" role="radiogroup" aria-label="Window background">{materials.map(([value,label])=><label key={value} className={`material-option ${draft.transparency===value?'selected':''}`}>
           <input type="radio" className="visually-hidden" name="material" value={value} checked={draft.transparency===value} onChange={()=>updateSettings({transparency:value})}/>
@@ -584,7 +636,7 @@ export default function App() {
         </label>)}</div>
         <div className="settings-grid">
           <div className="field"><span>Appearance</span><div className="segmented" role="radiogroup" aria-label="Appearance">{([['system','System'],['light','Light'],['dark','Dark']] as const).map(([value,label])=><button type="button" role="radio" aria-checked={draft.theme===value} key={value} onClick={()=>updateSettings({theme:value})}>{label}</button>)}</div></div>
-          <label className="field"><span>Demonstrations</span><select value={draft.demoPlacement} onChange={event=>updateSettings({demoPlacement:event.target.value as Settings['demoPlacement']})}><option value="side">Floating card by default</option><option value="popup">Separate window by default</option></select></label>
+          <label className="field"><span>Explanations and demos</span><select name="demoPlacement" value={draft.demoPlacement} onChange={event=>updateSettings({demoPlacement:event.target.value as Settings['demoPlacement']})}><option value="side">Floating card</option><option value="popup">Separate window</option><option value="file">File in sidebar</option></select></label>
         </div>
         <label className="check-setting voice-tools-setting"><input type="checkbox" name="lowPowerMode" checked={draft.lowPowerMode ?? false} onChange={event=>updateSettings({lowPowerMode:event.target.checked})}/><span>Low power mode<small>Use gentler orb playback to save power. Animation pauses when the app is unfocused.</small></span></label>
       </section>
@@ -601,7 +653,7 @@ export default function App() {
         </div>
         <h4>Context and speed</h4>
         <div className="settings-grid">
-          <label className="field"><span>Compact context at</span><input type="number" min={8000} max={200000} step={4000} value={draft.compactAtTokens} onChange={event=>updateSettings({compactAtTokens:Number(event.target.value)},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
+          <label className="field"><span>Compact context at</span><input type="number" min={8000} max={700000} step={4000} value={draft.compactAtTokens} onChange={event=>updateSettings({compactAtTokens:Number(event.target.value)},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
           <label className="check-setting"><input type="checkbox" checked={draft.autoCompact} onChange={event=>updateSettings({autoCompact:event.target.checked})}/><span>Auto compact</span></label>
           <label className="check-setting"><input type="checkbox" checked={draft.priority} onChange={event=>updateSettings({priority:event.target.checked})}/><span>Fast / Priority</span></label>
         </div>
