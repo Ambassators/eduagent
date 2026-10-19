@@ -5,6 +5,7 @@ import workerURL from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import type { DocumentContent, DocumentInfo, DocumentSource, PDFAnnotations } from '../shared';
 import Icon from './Icon';
+import SourcePreview from './SourcePreview';
 import { RichMarkdown } from './RichText';
 import PDFAnnotationLayer from './PDFAnnotationLayer';
 import type { OrbTone } from './Orb';
@@ -65,6 +66,8 @@ export default function DocumentViewer({file,onError,annotations,voice,source,da
   const documentRoot=useRef<HTMLDivElement>(null);
   const [content,setContent]=useState<DocumentContent|null>(null),[bytes,setBytes]=useState<Uint8Array|null>(null);
   const [page,setPage]=useState(1),[zoom,setZoom]=useState(1),[editing,setEditing]=useState(false),[draft,setDraft]=useState(''),[loading,setLoading]=useState(true);
+  const [wrapText,setWrapText]=useState(false);
+  const sourceText=file.kind==='text'&&file.extension!=='.rtf';
   const [pdf,setPDF]=useState<pdfjs.PDFDocumentProxy|null>(null),[imageURL,setImageURL]=useState('');
   const [pdfRevision,setPDFRevision]=useState<number|null>(null);
   const [hostWidth,setHostWidth]=useState(800);
@@ -79,7 +82,7 @@ export default function DocumentViewer({file,onError,annotations,voice,source,da
     }).catch(error=>{if(current){errorRef.current(error.message);setLoading(false);}});
     return()=>{current=false;};
   },[file.id,file.revision]);
-  useEffect(()=>{setPage(1);setZoom(1);pageHost.current?.scrollTo(0,0);},[file.id]);
+  useEffect(()=>{setWrapText(false);setPage(1);setZoom(1);pageHost.current?.scrollTo(0,0);},[file.id]);
   useEffect(()=>{const host=pageHost.current;if(!host)return;const observer=new ResizeObserver(entries=>setHostWidth(entries[0].contentRect.width));observer.observe(host);return()=>observer.disconnect();},[file.id,file.kind,loading]);
   useEffect(()=>{
     if(file.kind!=='image'||!bytes){setImageURL('');return;}
@@ -126,16 +129,17 @@ export default function DocumentViewer({file,onError,annotations,voice,source,da
       {annotationCount>0&&<button className="quiet-button" title="Clear temporary overlays, highlights, and pointing" onClick={()=>void window.desktop!.dismissPDFAnnotation().catch(error=>errorRef.current(error.message))}><Icon name="close" size={14}/>Clear overlays</button>}
       <button className="icon-button pdf-dark-toggle" title={pdfDark?'Turn off dark PDF pages':'Turn on dark PDF pages'} aria-label="Dark PDF pages" aria-pressed={pdfDark} onClick={togglePDFDark}><Icon name="moon" size={16}/></button>
       <div className="control-group"><button title="Zoom out" aria-label="Zoom out" disabled={zoom<=.5} onClick={()=>setZoom(old=>Math.max(.5,old-.15))}><Icon name="minus" size={14}/></button><span>{Math.round(zoom*100)}%</span><button title="Zoom in" aria-label="Zoom in" disabled={zoom>=2} onClick={()=>setZoom(old=>Math.min(2,old+.15))}><Icon name="plus" size={14}/></button></div></>}
+      {sourceText&&<button className="quiet-button" aria-label="Wrap lines" aria-pressed={wrapText} onClick={()=>setWrapText(old=>!old)}>Wrap lines</button>}
       {editable&&<button className="quiet-button" title={editing?'Preview':'Edit'} onClick={()=>setEditing(old=>!old)}><Icon name={editing?'eye':'edit'} size={14}/>{editing?'Preview':'Edit'}</button>}
       <button className="quiet-button" title="Save copy" onClick={()=>void window.desktop!.saveDocument(file.id,false).catch(error=>errorRef.current(error.message))}><Icon name="download" size={14}/>Save copy</button>
       {file.dirty&&file.originalPath&&<button className="quiet-button strong" title="A timestamped backup is created first" onClick={()=>void window.desktop!.saveDocument(file.id,true).catch(error=>errorRef.current(error.message))}><Icon name="save" size={14}/>Save original</button>}
     </div></div>
     {file.warning&&<div className="document-warning">{file.warning}</div>}
-    {loading?<div className="viewer-loading"><span className="loading-ring"/></div>:editing?<div className="text-editor"><textarea aria-label="Edit document text" spellCheck={false} value={draft} onChange={event=>setDraft(event.target.value)}/><div><span/><button className="button-primary" onClick={()=>void saveDraft()}><Icon name="check" size={15}/>Apply changes</button></div></div>:
+    {loading?<div className="viewer-loading"><span className="loading-ring"/></div>:editing?<div className="text-editor"><textarea aria-label="Edit document text" spellCheck={false} wrap={sourceText&&!wrapText?'off':'soft'} value={draft} onChange={event=>setDraft(event.target.value)}/><div><span/><button className="button-primary" onClick={()=>void saveDraft()}><Icon name="check" size={15}/>Apply changes</button></div></div>:
       file.kind==='pdf'?<div className={`pdf-scroll${pdfDark?' pdf-dark':''}`} ref={pageHost} data-file-id={file.id} data-revision={file.revision} onScroll={trackPage}>{pdf&&pdfRevision===file.revision&&pageHost.current?Array.from({length:pdf.numPages},(_,index)=><PDFPage key={`${file.id}-${file.revision}-${index}`} pdf={pdf} page={index+1} width={Math.max(200,Math.min(840,hostWidth-56))} zoom={zoom} scrollHost={pageHost.current!} onError={onError} file={file} annotations={annotations} voice={voice}/>):<div className="viewer-loading"><span className="loading-ring"/></div>}</div>:
       file.kind==='image'?<div className="image-preview"><img src={imageURL} alt={file.name}/></div>:
       file.kind==='binary'?<div className="unsupported-preview"><span className={`file-glyph large ${file.kind}`}>{file.extension.slice(1).toUpperCase().slice(0,4)}</span><h2>{file.name}</h2><p>No preview · {(file.size/1024).toFixed(1)} KB</p></div>:
       file.kind==='html'&&['.html','.htm'].includes(file.extension)?<iframe className="document-demo" title={file.name} sandbox="allow-scripts" src={`codex-presentation://${file.id}/document?revision=${file.revision}`}/>:
-      <div className="paper-scroll"><article className="document-paper">{file.kind==='markdown'?<MarkdownView text={content?.text??''}/>:sanitized?<div className="word-body" onClick={event=>{const anchor=(event.target as HTMLElement).closest('a');if(anchor){event.preventDefault();void window.desktop!.openURL(anchor.href).catch(error=>errorRef.current(error.message));}}} dangerouslySetInnerHTML={{__html:sanitized}}/>:<pre className="plain-document">{content?.text||'This document contains no readable text.'}</pre>}</article></div>}
+      <div className={`paper-scroll${sourceText?' source-scroll':''}`}><article className={`document-paper${sourceText?' source-paper':''}`}>{file.kind==='markdown'?<MarkdownView text={content?.text??''}/>:sanitized?<div className="word-body" onClick={event=>{const anchor=(event.target as HTMLElement).closest('a');if(anchor){event.preventDefault();void window.desktop!.openURL(anchor.href).catch(error=>errorRef.current(error.message));}}} dangerouslySetInnerHTML={{__html:sanitized}}/>:sourceText?<SourcePreview text={content?.text??''} extension={file.extension} name={file.name} wrap={wrapText}/>:<pre className="plain-document">{content?.text||'This document contains no readable text.'}</pre>}</article></div>}
   </div>;
 }

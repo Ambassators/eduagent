@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { CodexClient, bundledCodex } from './codex.js';
 import { defaultSettings, type Settings, type Status, type AppEvent, type TranscriptEntry, type WorkspaceState, type Presentation, type SavedChat, type ChatSummary } from '../shared.js';
 import { cleanSettings } from './settings.js';
+import { documentFileFilters } from '../document-formats.js';
 import { DocumentStore } from './documents.js';
 import { interactiveQuizVoiceInstructions } from '../quiz-routing.js';
 import { ThinkEngine } from './think.js';
@@ -440,7 +441,7 @@ function registerIPC(): void {
     return pdfOverlays.execute('get_pdf_view',{fileId,page});
   });
   handle('openFiles',async()=>{
-    const selected=await dialog.showOpenDialog(window!,{title:'Open files in Codex Voice',properties:['openFile','multiSelections'],filters:[{name:'Documents',extensions:['quiz','pdf','docx','doc','odt','tex','ltx','latex','txt','md','rtf','csv','json','html','png','jpg','jpeg','webp']},{name:'All files',extensions:['*']}]});
+    const selected=await dialog.showOpenDialog(window!,{title:'Open files in Codex Voice',properties:['openFile','multiSelections'],filters:documentFileFilters});
     if(!selected.canceled)await documents.open(selected.filePaths);if(documents.activeId&&documents.get(documents.activeId).info.kind==='quiz')await quizFiles.select(documents.activeId);return workspaceState();
   });
   handle('openPaths',async(paths:unknown)=>{
@@ -577,7 +578,7 @@ async function initializeApp(): Promise<void> {
     settings = cleanSettings(saved);
   } catch { /* First launch uses defaults. */ }
   if(settings.prompt.startsWith('You are a warm, thoughtful voice companion.'))settings.prompt=defaultSettings.prompt;
-  documents=new DocumentStore(path.join(workspace,'files'),()=>{if(thinker)workspaceChanged();});
+  documents=new DocumentStore(path.join(workspace,'files'),()=>{if(thinker)workspaceChanged();},name=>emit({method:'document/waiting',params:{name}}));
   await documents.initialize();
   pdfOverlays=new PDFOverlays(documents,emit);
   quizzes=new QuizEngine(codex,()=>settings,workspace,emit,()=>documents.list().filter(file=>file.kind==='pdf').map(file=>({fileId:file.id,title:file.name,pages:documents.content(file.id).pages??[]})),()=>documents.activeId&&documents.get(documents.activeId).info.kind==='pdf'?documents.activeId:null);

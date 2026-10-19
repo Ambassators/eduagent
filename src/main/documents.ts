@@ -1,5 +1,6 @@
 import { readFile, writeFile, mkdir, stat, realpath, copyFile } from 'node:fs/promises';
 import path from 'node:path';
+import { readDocumentFile } from './file-read.js';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import mammoth from 'mammoth';
@@ -9,6 +10,7 @@ import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { PDFDocument, PDFTextField, PDFCheckBox, PDFDropdown, PDFOptionList, PDFRadioGroup, rgb, degrees, type PDFFont, type PDFPage } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
+import { textFileExtensions } from '../document-formats.js';
 import type { DocumentContent, DocumentInfo, DocumentKind } from '../shared.js';
 import { isTeXExtension, TEX_MAX_BYTES } from '../glasstex.js';
 /** Characters of PDF text above which the live voice agent sees only the current page. */
@@ -32,7 +34,7 @@ function kindFor(extension: string, bytes: Buffer): DocumentKind {
   if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'].includes(extension)) return 'image';
   if (['.html', '.htm', '.svg'].includes(extension)) return 'html';
   const sample = bytes.subarray(0, 4096);
-  if (['.txt', '.json', '.csv', '.rtf', '.xml', '.yaml', '.yml'].includes(extension) || !sample.includes(0) || (sample[0] === 255 && sample[1] === 254)) return 'text';
+  if (textFileExtensions.includes(extension.slice(1)) || extension === '.rtf' || !sample.includes(0) || (sample[0] === 255 && sample[1] === 254) || (sample[0] === 254 && sample[1] === 255)) return 'text';
   return 'binary';
 }
 function decodeText(bytes: Buffer): string {
@@ -84,7 +86,7 @@ export class DocumentStore {
   activeId: string | null = null;
   private edits: Promise<unknown> = Promise.resolve();
   private pendingEdits = 0;
-  constructor(private directory: string, private changed: () => void) {}
+  constructor(private directory: string, private changed: () => void, private waiting: (name: string) => void = () => {}) {}
   async initialize() {
     await mkdir(this.directory, { recursive: true });
     try {
@@ -115,7 +117,7 @@ export class DocumentStore {
       if (this.records.size >= 40) throw new Error('Close a file before opening more than 40 documents.');
       const metadata = await stat(source);
       if (!metadata.isFile() || metadata.size > MAX_BYTES) throw new Error('Open a regular file smaller than 100 MB.');
-      const bytes = await readFile(source);
+      const bytes = await readDocumentFile(source, this.waiting);
       const extension = /^\.[a-z0-9]{1,15}$/.test(path.extname(source).toLowerCase()) ? path.extname(source).toLowerCase() : '.bin';
       const info: DocumentInfo = { id: randomUUID(), name: path.basename(source), extension, kind: kindFor(extension, bytes), originalPath: source, size: bytes.length, revision: 1, dirty: false };
       if (info.kind === 'tex') decodeTeX(bytes);

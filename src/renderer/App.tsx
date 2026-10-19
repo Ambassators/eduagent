@@ -83,6 +83,7 @@ export default function App() {
   const [presentationId,setPresentationId]=useState<string|null>(null);
   const [dropActive,setDropActive]=useState(false);
   const [opening,setOpening]=useState(false);
+  const [waitingFile,setWaitingFile]=useState('');
   const [status, setStatus] = useState<Status | null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
   const phaseRef = useRef<Phase>('idle');
@@ -268,6 +269,7 @@ export default function App() {
         case 'workspace/changed':setWorkspace(p.workspace as unknown as WorkspaceState);break;
         case 'workspace/fileShown':setBrowserVisible(false);setPresentationId(null);break;
         case 'workspace/annotations':setWorkspace(old=>old?{...old,annotations:p.annotations as unknown as WorkspaceState['annotations']}:old);break;
+        case 'document/waiting':setWaitingFile(String(p.name??''));break;
         case 'document/source':setSourceTarget(p.source as unknown as DocumentSource);setBrowserVisible(false);break;
         case 'quiz/state':setWorkspace(old=>old?{...old,quiz:p.state as unknown as WorkspaceState['quiz']}:old);break;
         case 'pdf/tool': {
@@ -478,8 +480,8 @@ export default function App() {
   const thinking=workspace?.thinking;
   const lastThink=thinkMessages[thinkMessages.length-1];
   const thinkPreview=lastThink?.role==='assistant'&&!lastThink.final?lastThink.text:'';
-  async function openFiles(){setBrowserVisible(false);setOpening(true);setError('');try{await flushTeX();setWorkspace(await api().openFiles());}catch(e){setError(errorMessage(e));}finally{setOpening(false);}}
-  async function dropFiles(event:React.DragEvent){event.preventDefault();setDropActive(false);setOpening(true);try{const paths=[...event.dataTransfer.files].map(file=>api().filePath(file)).filter(Boolean);await flushTeX();if(paths.length)setWorkspace(await api().openPaths(paths));}catch(e){setError(errorMessage(e));}finally{setOpening(false);}}
+  async function openFiles(){setWaitingFile('');setBrowserVisible(false);setOpening(true);setError('');try{await flushTeX();setWorkspace(await api().openFiles());}catch(e){setError(errorMessage(e));}finally{setOpening(false);}}
+  async function dropFiles(event:React.DragEvent){event.preventDefault();setWaitingFile('');setDropActive(false);setOpening(true);try{const paths=[...event.dataTransfer.files].map(file=>api().filePath(file)).filter(Boolean);await flushTeX();if(paths.length)setWorkspace(await api().openPaths(paths));}catch(e){setError(errorMessage(e));}finally{setOpening(false);}}
   const contextPercent=Math.min(100,(thinking?.tokens??0)/draft.compactAtTokens*100);
   // One timeline: spoken and typed turns, Think's answers, and (with Logs on) what ran in between.
   // Think's own copy of each request is skipped; the request already shows as the user's turn or as a route log.
@@ -504,7 +506,7 @@ export default function App() {
         <div className="rail-top drag"/>
         <button className="open-files" onClick={()=>void openFiles()} disabled={opening}>
           <span className="open-files-icon">{opening?<span className="loading-ring"/>:<Icon name="plus" size={16}/>}</span>
-          <strong>{opening?'Opening…':'Open files'}</strong>
+          <strong title={opening&&waitingFile?`Waiting for ${waitingFile} to download`:undefined}>{opening?(waitingFile?'Waiting for sync…':'Opening…'):'Open files'}</strong>
           <kbd>{mod}O</kbd>
         </button>
         <button className="rail-action" onClick={()=>void flushTeX().then(()=>{setBrowserVisible(true);if(!browserState?.tabs.length)return api().browserOpen();}).catch(e=>setError(errorMessage(e)))}><Icon name="globe" size={15}/>Browser<span>{browserState?.tabs.length || ''}</span></button>
