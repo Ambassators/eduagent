@@ -49,8 +49,9 @@ jobs:
             test -n "$CSC_KEY_PASSWORD" || { echo 'Set MAC_CSC_KEY_PASSWORD for the configured signing certificate.'; exit 1; }
             echo 'MAC_SIGNING_ARGS=--config.forceCodeSigning=true' >> "$GITHUB_ENV"
           else
-            echo 'MAC_SIGNING_ARGS=' >> "$GITHUB_ENV"
-            echo 'macOS packages will be unsigned and require manual installation.' >> "$GITHUB_STEP_SUMMARY"
+            # Ad-hoc sign so the bundle seal is valid; otherwise Gatekeeper reports the download as "damaged".
+            echo 'MAC_SIGNING_ARGS=--config.mac.identity=- --config.mac.hardenedRuntime=false' >> "$GITHUB_ENV"
+            echo 'macOS packages are ad-hoc signed and must be opened via System Settings > Privacy & Security > Open Anyway.' >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Build update packages and manifests
         shell: bash

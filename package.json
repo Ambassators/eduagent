@@ -1,7 +1,7 @@
 {
   "name": "codex-voice",
   "productName": "Codex Voice",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "A local document workspace with subscription GPT-Live voice, Codex Think, and interactive demonstrations",
   "author": "Codex Voice contributors",
   "license": "MIT",
