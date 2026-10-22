@@ -79,9 +79,21 @@ export type DocumentKind = 'pdf' | 'word' | 'markdown' | 'text' | 'tex' | 'image
 export interface DocumentInfo {
   id: string; name: string; kind: DocumentKind; extension: string; originalPath: string;
   size: number; revision: number; dirty: boolean; pageCount?: number; warning?: string;
+  /** Sidebar folder holding this file; absent for files at the top level. */
+  folderId?: string;
 }
+/** A sidebar group of open files. `path` is set when it was opened from a folder on disk. */
+export interface DocumentFolder { id: string; name: string; collapsed: boolean; path?: string }
 export interface DocumentContent { info: DocumentInfo; text: string; html?: string; pages?: { number: number; text: string; width: number; height: number }[]; fields?: { name: string; type: string; value: string | boolean }[] }
 export interface DocumentSource { fileId: string; label: string; page?: number; quote?: string }
+/** PDF positions are fractions of the visible page, including its crop and rotation. */
+export interface PDFTextChange {
+  action: 'replace_text' | 'add_text'; page: number;
+  x: number; y: number; width: number; height: number;
+  text: string; fontSize: number; color: string;
+  fontFamily?: 'sans' | 'serif' | 'mono'; originalText?: string;
+  originalRect?: { x: number; y: number; width: number; height: number };
+}
 export interface Presentation { id: string; title: string; kind: 'text' | 'demo'; content: string; placement: 'side' | 'popup'; time: number }
 /** `delegating`: the voice bridge is handling a request (it may run tools directly without a Think job). */
 export interface ThinkState { threadId: string | null; busy: boolean; delegating: boolean; compacting: boolean; queued: number; tokens: number; contextWindow: number | null; lastCompacted?: number; contextVersion: number }
@@ -92,7 +104,7 @@ export interface PDFHighlight { id: string; fileId: string; page: number; revisi
 export interface PDFPointer { fileId: string; page: number; revision: number; target: PageRect; dot: { x: number; y: number }; label: string }
 export interface PDFAnnotations { overlays: PDFOverlay[]; highlights: PDFHighlight[]; pointer: PDFPointer | null }
 export interface PDFToolRequest { id: string; tool: string; fileId: string; revision: number; args: Record<string, unknown> }
-export interface WorkspaceState { files: DocumentInfo[]; activeId: string | null; artifacts: Presentation[]; thinking: ThinkState; annotations: PDFAnnotations; quiz: QuizState }
+export interface WorkspaceState { files: DocumentInfo[]; folders: DocumentFolder[]; activeId: string | null; artifacts: Presentation[]; thinking: ThinkState; annotations: PDFAnnotations; quiz: QuizState }
 /** One line of the debug log. `agent` is the thread that acted: the realtime voice, the bridge text thread behind it, or Think. */
 export interface DebugLog { id: string; time: number; agent: 'voice' | 'bridge' | 'think' | 'app'; kind: 'tool' | 'route' | 'event' | 'error'; label: string; detail?: string; model?: string; status?: 'running' | 'completed' | 'failed'; ms?: number }
 export interface ToolActivity { id: string; name: string; status: 'running' | 'completed' | 'failed'; detail: string; time: number }
@@ -142,6 +154,15 @@ export interface DesktopAPI {
   workspace(): Promise<WorkspaceState>;
   openFiles(): Promise<WorkspaceState>;
   openPaths(paths: string[]): Promise<WorkspaceState>;
+  /** Opens the supported files directly inside a chosen folder into a matching sidebar folder. */
+  openFolder(): Promise<WorkspaceState>;
+  createFolder(name: string, fileIds?: string[]): Promise<{ id: string; workspace: WorkspaceState }>;
+  renameFolder(id: string, name: string): Promise<WorkspaceState>;
+  setFolderCollapsed(id: string, collapsed: boolean): Promise<WorkspaceState>;
+  moveFile(fileId: string, folderId: string | null): Promise<WorkspaceState>;
+  /** Native context menus. Renaming and closing are sent back as `sidebar/renameFolder` and `sidebar/closeFiles` events. */
+  fileMenu(fileId: string): Promise<void>;
+  folderMenu(folderId: string): Promise<void>;
   filePath(file: unknown): string;
   selectFile(id: string): Promise<WorkspaceState>;
   closeFile(id: string): Promise<WorkspaceState>;
@@ -149,8 +170,11 @@ export interface DesktopAPI {
   documentBytes(id: string): Promise<Uint8Array>;
   saveDocument(id: string, original: boolean): Promise<boolean>;
   updateDocument(id: string, text: string): Promise<DocumentContent>;
+  editPDFText(id: string, revision: number, change: PDFTextChange): Promise<DocumentContent>;
+  undoPDFText(id: string, revision: number): Promise<DocumentContent>;
   updateTeXDocument(id: string, text: string, revision: number): Promise<DocumentContent>;
   exportTeXPDF(id: string, settings: TeXSettings): Promise<boolean>;
+  texAssets(id: string): Promise<Record<string, string>>;
   setPage(id: string, page: number): Promise<void>;
   /** Where the mouse pointer is in the open document while the user speaks. */
   pointer(text: string): Promise<void>;

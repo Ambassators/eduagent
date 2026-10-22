@@ -14,6 +14,12 @@ let writer = try AVAssetWriter(outputURL: output, fileType: .mp4)
 let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
     AVVideoCodecKey: AVVideoCodecType.h264,
     AVVideoWidthKey: size, AVVideoHeightKey: size,
+    // Tag the stream; untagged SD video decodes as BT.601 on some Windows paths and shifts the orb's hues.
+    AVVideoColorPropertiesKey: [
+        AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+        AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+        AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2
+    ],
     AVVideoCompressionPropertiesKey: [
         AVVideoAverageBitRateKey: 240_000,
         AVVideoExpectedSourceFrameRateKey: Int(fps),

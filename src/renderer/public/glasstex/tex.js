@@ -237,6 +237,10 @@ function noIndentAliases(source, body) {
 function scanDocument(source) {
   const body = bodyRange(source), tokens = [], warnings = [];
   const noIndent = noIndentAliases(source, body);
+  const sourceMacros = readMacroDefinitions(source);
+  const literalMacros = Object.fromEntries(Object.entries(sourceMacros)
+    .filter(([, value]) => value.length <= 160 && !/[\\{}$]/.test(value))
+    .map(([name,value])=>[name.replace(/^\\/,''),value]));
   let algorithmNumber=0;
   const push = (kind, start, end, more = {}) => tokens.push({
     id: `t${tokens.length}`, kind, start, end, contentStart: start, contentEnd: end, ...more
@@ -323,6 +327,10 @@ function scanDocument(source) {
         if (vspace) {
           const arg = balanced(source, cursor + vspace[0].length);
           if (arg && arg.after <= limit) {
+            if (/^\\stretch\s*\{\s*1\s*\}$/.test(source.slice(arg.start, arg.end).trim())) {
+              flush(cursor); push('spacing', cursor, arg.after, {spacing:'32px'}); lineStart=true;
+              cursor=plainStart=skipAfterCommand(arg.after); continue;
+            }
             const dimension = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(em|ex|pt|px|cm|mm|in|pc)$/.exec(source.slice(arg.start, arg.end).trim());
             if (dimension && Math.abs(Number(dimension[1])) <= 1000) {
               verticalBreak('spacing', arg.after, {spacing:Number(dimension[1]) + dimension[2]}); continue;
@@ -330,6 +338,32 @@ function scanDocument(source) {
             flush(cursor); push('raw', cursor, arg.after); lineStart = false;
             cursor = plainStart = arg.after; continue;
           }
+        }
+        const vfill = /^\\vfill\b/.exec(source.slice(cursor));
+        if (vfill) { verticalBreak('spacing', cursor + vfill[0].length, {spacing:'32px'}); continue; }
+        const hrulefill=/^\\(?:hrulefill|dotfill)(?![A-Za-z])/.exec(source.slice(cursor));
+        if(hrulefill){flush(cursor);push('blank',cursor,cursor+hrulefill[0].length,{width:'5em',rule:true});lineStart=false;cursor=plainStart=cursor+hrulefill[0].length;continue;}
+        const hspace = /^\\hspace\*?\s*/.exec(source.slice(cursor));
+        if (hspace) {
+          const arg=balanced(source,cursor+hspace[0].length);
+          if(arg&&arg.after<=limit){
+            const value=source.slice(arg.start,arg.end).trim();
+            if(/^(?:\d+(?:\.\d*)?|\.\d+)\s*(?:em|ex|pt|px|cm|mm|in|pc)$/.test(value)){
+              flush(cursor);push('hspace',cursor,arg.after,{spacing:value.replace(/\s+/g,'')});lineStart=false;cursor=plainStart=arg.after;continue;
+            }
+          }
+        }
+        const fillin=/^\\(?:fillin|makeemptybox|emptybox)\*?(?![A-Za-z])\s*/.exec(source.slice(cursor));
+        if(fillin){
+          let at=cursor+fillin[0].length,answer='';
+          if(source[at]==='['){const opt=balanced(source,at,'[',']');if(opt&&opt.after<=limit){answer=source.slice(opt.start,opt.end);at=opt.after;}}
+          let width='1.5em';
+          if(source[at]==='['){const opt=balanced(source,at,'[',']');if(opt&&opt.after<=limit){
+            const value=source.slice(opt.start,opt.end).trim();
+            if(/^(?:\d+(?:\.\d*)?|\.\d+)\s*(?:em|ex|pt|px|cm|mm|in|pc)$/.test(value))width=value.replace(/\s+/g,'');
+            at=opt.after;
+          }}
+          flush(cursor);push('blank',cursor,at,{width,answer});lineStart=false;cursor=plainStart=at;continue;
         }
         const skip = /^\\(smallskip|medskip|bigskip)(?![A-Za-z])/.exec(source.slice(cursor));
         if (skip) { verticalBreak('spacing', cursor + skip[0].length, {spacing:SKIPS[skip[1]]}); continue; }
@@ -347,8 +381,68 @@ function scanDocument(source) {
           push('formatStart',cursor,after,{format});declarations.push({format,family});
           cursor=plainStart=after;continue;
         }
-        const metadata=/^\\(?:pagestyle|thispagestyle)\s*\{[^{}]*\}/.exec(source.slice(cursor));
+        const metadata=/^\\(?:pagestyle|thispagestyle|label|lhead|chead|rhead)\s*\{[^{}]*\}|^\\(?:centering|raggedright|raggedleft|hfill|hfil|enspace|quad|qquad|hrulefill|dotfill|ifcontinuation)(?![A-Za-z])/.exec(source.slice(cursor));
         if(metadata){flush(cursor);const after=cursor+metadata[0].length;push('metadata',cursor,after);cursor=plainStart=after;continue;}
+        const header=/^\\(?:lhead|chead|rhead)\s*/.exec(source.slice(cursor));
+        if(header){const arg=balanced(source,cursor+header[0].length);if(arg&&arg.after<=limit){flush(cursor);push('metadata',cursor,arg.after);cursor=plainStart=arg.after;continue;}}
+        const macro=/^\\([A-Za-z]+)(?![A-Za-z])/.exec(source.slice(cursor));
+        if(macro&&Object.hasOwn(literalMacros,macro[1])){
+          flush(cursor);const after=cursor+macro[0].length;push('literal',cursor,after,{text:literalMacros[macro[1]]});lineStart=false;cursor=plainStart=after;continue;
+        }
+        const graphics=/^\\includegraphics\*?\s*/.exec(source.slice(cursor));
+        if(graphics){
+          let at=cursor+graphics[0].length,width;
+          if(source[at]==='['){const option=balanced(source,at,'[',']');if(option&&option.after<=limit){
+            const match=/(?:^|,)\s*width\s*=\s*(\d+(?:\.\d*)?|\.\d+)\s*(\\(?:textwidth|linewidth)|(?:em|ex|pt|px|cm|mm|in|pc))/.exec(source.slice(option.start,option.end));
+            if(match)width=match[2].startsWith('\\')?`${Math.min(100,Number(match[1])*100)}%`:`${match[1]}${match[2]}`;
+            at=option.after;
+          }}
+          const arg=balanced(source,at);
+          if(arg&&arg.after<=limit){flush(cursor);push('image',cursor,arg.after,{path:source.slice(arg.start,arg.end).trim(),width});lineStart=false;cursor=plainStart=arg.after;continue;}
+        }
+        const examCommand=/^\\(titledquestion|question|part|subpart|subsubpart|bonusquestion)(?![A-Za-z])/.exec(source.slice(cursor));
+        if(examCommand){
+          let at=cursor+examCommand[0].length;
+          while(/[ \t]/.test(source[at]||'')&&at<limit)at++;
+          let title=null,points=null;
+          if(examCommand[1]==='titledquestion'){
+            const arg=balanced(source,at);if(arg&&arg.after<=limit){title=arg;at=arg.after;}
+          }
+          while(/[ \t]/.test(source[at]||'')&&at<limit)at++;
+          if(source[at]==='['){const opt=balanced(source,at,'[',']');if(opt&&opt.after<=limit){points=source.slice(opt.start,opt.end).trim();at=opt.after;}}
+          const level=examCommand[1].includes('question')?'question':examCommand[1].startsWith('subsub')?'subpart':examCommand[1].startsWith('sub')?'subpart':'part';
+          const contentStart=title?title.start:at,contentEnd=title?title.end:at;
+          flush(cursor);push('examItem',cursor,at,{level, label:level==='question'?'Question':null, points, title:title?source.slice(title.start,title.end):undefined, contentStart,contentEnd});
+          lineStart=level==='question';cursor=plainStart=at;continue;
+        }
+        const grade=/^\\gradetable\*?\s*/.exec(source.slice(cursor));
+        if(grade){
+          let at=cursor+grade[0].length,options=[];
+          while(source[at]==='['){const opt=balanced(source,at,'[',']');if(!opt||opt.after>limit)break;options.push(source.slice(opt.start,opt.end).trim());at=opt.after;}
+          flush(cursor);push('gradeTable',cursor,at,{mode:options[0]||'',scope:options.at(-1)||''});lineStart=true;cursor=plainStart=at;continue;
+        }
+        // Exam formatting wrappers keep their braces and dimensions in the boundary
+        // tokens while the contained prose remains normally editable.
+        const wrapper=/^\\(fbox|parbox|makebox|scalebox)(?![A-Za-z])\s*/.exec(source.slice(cursor));
+        if(wrapper&&depth<64){
+          let at=cursor+wrapper[0].length,option='',width='',scale='';
+          if(wrapper[1]==='parbox'){
+            while(source[at]==='['){const opt=balanced(source,at,'[',']');if(!opt||opt.after>limit)break;option=source.slice(opt.start,opt.end).trim();at=opt.after;}
+            const arg=balanced(source,at);if(arg&&arg.after<=limit){width=source.slice(arg.start,arg.end).trim();at=arg.after;}
+          } else if(wrapper[1]==='makebox'){
+            if(source[at]==='['){const opt=balanced(source,at,'[',']');if(opt&&opt.after<=limit){width=source.slice(opt.start,opt.end).trim();at=opt.after;}}
+            if(source[at]==='['){const opt=balanced(source,at,'[',']');if(opt&&opt.after<=limit){option=source.slice(opt.start,opt.end).trim();at=opt.after;}}
+          } else if(wrapper[1]==='scalebox'){
+            const arg=balanced(source,at);if(arg&&arg.after<=limit){scale=source.slice(arg.start,arg.end).trim();at=arg.after;}
+            if(source[at]==='['){const opt=balanced(source,at,'[',']');if(opt&&opt.after<=limit){option=source.slice(opt.start,opt.end).trim();at=opt.after;}}
+          }
+          const content=balanced(source,at);
+          if(content&&content.after<=limit){
+            flush(cursor);push('blockStart',cursor,content.start,{environment:wrapper[1],option,width,scale});
+            scanRange(content.start,content.end,false,depth+1,inAlgorithm);
+            push('blockEnd',content.end,content.after);lineStart=false;cursor=plainStart=content.after;continue;
+          }
+        }
         const literal=/^\\([A-Za-z]+)(?![A-Za-z])(?:\{\})?/.exec(source.slice(cursor));
         if(literal&&Object.hasOwn(LITERALS,literal[1])){flush(cursor);lineStart=false;const after=cursor+literal[0].length;push('literal',cursor,after,{text:LITERALS[literal[1]]});cursor=plainStart=after;continue;}
         const caption=inAlgorithm&&/^\\caption\s*/.exec(source.slice(cursor));
@@ -426,9 +520,16 @@ function scanDocument(source) {
                 cursor=plainStart=close.end;continue;
               }
             }
-            if (['center','flushleft','flushright','quote'].includes(env[1]) && depth < 64) {
-              push('blockStart', cursor, cursor + env[0].length, {environment:env[1]});
-              scanRange(cursor + env[0].length, close.start, false, depth + 1);
+            if (['center','flushleft','flushright','quote','questions','parts','subparts','minipage','Figure'].includes(env[1]) && depth < 64) {
+              let inner=cursor+env[0].length;
+              let width;
+              if(env[1]==='minipage'){
+                while(/\s/.test(source[inner]||'')&&inner<close.start)inner++;
+                if(source[inner]==='['){const opt=balanced(source,inner,'[',']');if(opt&&opt.after<=close.start)inner=opt.after;}
+                const arg=balanced(source,inner);if(arg&&arg.after<=close.start){width=source.slice(arg.start,arg.end).trim();const relative=/^(\d+(?:\.\d*)?|\.\d+)\s*\\(?:textwidth|linewidth)$/.exec(width);if(relative)width=`${Math.min(100,Number(relative[1])*100)}%`;inner=arg.after;}
+              }
+              push('blockStart', cursor, inner, {environment:env[1],width});
+              scanRange(inner, close.start, false, depth + 1);
               push('blockEnd', close.start, close.end);
               cursor = plainStart = close.end; continue;
             }

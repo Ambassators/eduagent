@@ -39,9 +39,12 @@ macOS requires a Developer ID signed app for in-app updates. Configure `MAC_CSC_
 
 Open multiple files with **Open files**, Ctrl/Cmd+O, or drag and drop. Switch between the sidebar or document tabs. The selected file is automatically shared with voice as quiet context; you do not have to press Think to discuss it. File selection and PDF page changes also update the Think thread without starting a reasoning turn.
 
+**Folders** group open files in the sidebar. Use the new-folder button beside **Files**, then drag files onto a folder, or right-click a file and choose **Move to folder**. Click a folder to collapse it. Right-click it, or use its **⋯** button, to rename it, close its files, or delete it. Deleting a folder keeps its files open. To open a folder from disk, use the open-folder button, choose **Open a folder** on the welcome screen, or drop it onto the window. Its supported documents open into a sidebar folder with the same name; subfolders and hidden files are skipped. Folders and their contents persist between launches.
+
 Supported previews and extraction:
 
 - PDF: rendered pages with selectable text, pagination, zoom, extracted text, and form field information.
+- **Edit PDF** adds page text editing: choose **Change text** and click a text run to replace or delete it, or choose **Add text** and click to place an answer or note. Review the text, size, color, and box dimensions, then **Apply**. **Undo** restores up to ten recent text edits in the current session. Changes stay in the working copy until **Save copy** or **Save original**. Scanned pages support added text; replacing text requires a selectable text layer. Angled text is currently excluded from replacement.
 - Word DOCX: semantic rich preview with headings, tables, and embedded images. It is not a pixel-identical Word page layout.
 - Legacy DOC and ODT: text preview and context; rewriting can create a new DOCX.
 - TXT, Markdown, code, JSON, CSV, XML, and other text files: readable previews; TXT/Markdown/HTML can be edited in the workspace.
@@ -61,11 +64,15 @@ GlassTeX includes the original visual document editor and 443 feature templates,
 
 Use **Full source** to edit the whole document. Visual edits preserve unrelated source, comments, preamble, line endings, and Unicode. TeX files must be UTF-8 and at most 8 MiB. Edits persist immediately to the workspace working copy; **Save copy** and **Save original** use the app's existing save and backup workflow. Think can read and edit the current TeX working copy.
 
+Imported exams keep the same editable view: question and part labels, answer blanks, boxed instructions, common layout wrappers, and simple text macros render visually. Referenced PNG/JPEG/WebP/GIF and PDF figures resolve beside the original TeX file; PDF figures use a local image preview. Keep those assets alongside the source when moving the document. The original commands remain in the source.
+
 **Export to PDF** prints a separate snapshot of the GlassTeX rendering. It uses the bundled renderer; package processing and full TeX compilation are outside GlassTeX's rendering support. Unrecognized source fragments remain editable and preserved in the document.
 
 Shortcuts: Cmd/Ctrl+Enter inserts an equation, Shift+Cmd/Ctrl+Enter inserts inline math, Cmd/Ctrl+K searches features, Shift+Cmd/Ctrl+L toggles source, Shift+Cmd/Ctrl+P toggles preview, and Shift+Cmd/Ctrl+I toggles the inspector. Cmd/Ctrl+S saves the original with a backup; Shift+Cmd/Ctrl+S saves a copy. Cmd/Ctrl+Alt+E exports PDF.
 
 Run `npm test` for unit tests and `npm run test:glasstex` for the isolated Electron integration check. GlassTeX and its bundled MathLive/KaTeX licenses are retained in `src/renderer/public/glasstex`.
+
+PDF text replacement uses [MuPDF.js](https://github.com/ArtifexSoftware/mupdf.js), licensed AGPL-3.0-or-later. Its license and notices ship with the `mupdf` dependency. Replacement removes the selected text from the page content while preserving images and line art; new text uses an embedded replacement font rather than editing the original embedded font program.
 
 ## Voice and Think
 

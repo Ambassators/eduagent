@@ -29,7 +29,7 @@
   const doc = { source: '', revision: 0, tokens: [], body: { start: 0, end: 0 }, macros: {} };
   /** The rendered page. items maps editable token ids to their editors, in no particular order;
    *  editableItems() gives document order. regions are the containers (lists, cells, blocks…). */
-  const view = { items: new Map(), regions: [], rendering: false, layoutFrame: null, slotID: 0 };
+  const view = { items: new Map(), regions: [], rendering: false, layoutFrame: null, slotID: 0, assets: Object.create(null) };
   /** What the person is doing. */
   const ui = {
     active: null,          // the focused item
@@ -46,13 +46,13 @@
   // Token kinds, by role.
   const CONTAINERS = { blockStart: 'blockEnd', listStart: 'listEnd', formatStart: 'formatEnd', tableStart: 'tableEnd', tableRowStart: 'tableRowEnd', tableCellStart: 'tableCellEnd' };
   const CLOSERS = new Set(Object.values(CONTAINERS));
-  const TEXT_KINDS = new Set(['text', 'heading', 'raw', 'code']);
+  const TEXT_KINDS = new Set(['text', 'heading', 'raw', 'code', 'examItem']);
   /** Tokens that a stretch of whitespace before them cannot be seen next to. */
   const BLOCK_FOLLOWERS = new Set(['blockStart', 'blockEnd', 'listStart', 'listItem', 'listEnd', 'tableStart', 'tableEnd', 'tableRowEnd', 'tableCellEnd', 'code', 'heading', 'raw', 'linebreak', 'spacing', 'pagebreak']);
   /** Tokens that can sit between two items on the same line of prose. */
   const INLINE_GAP = new Set(['formatStart', 'formatEnd', 'literal', 'comment', 'metadata', 'text']);
   /** Tokens that one Backspace or Delete removes whole: forced line breaks, spaces, page breaks, …, \LaTeX. */
-  const ATOMS = new Set(['linebreak', 'spacing', 'pagebreak', 'literal']);
+  const ATOMS = new Set(['linebreak', 'spacing', 'pagebreak', 'literal', 'blank', 'hspace', 'image', 'gradeTable']);
   /** Algorithm statements that stand alone; control-flow lines (While … EndWhile) come in groups. */
   const STATEMENTS = new Set(['State', 'Statex', 'Require', 'Ensure']);
 
@@ -245,7 +245,7 @@
     setCaret(item, end ? visibleEnd(item) : 0);
   }
   /** Laid out on its own line rather than inline in prose. */
-  const isBlockItem = item => item.token.kind === 'math' ? item.token.display : ['heading', 'code', 'raw'].includes(item.token.kind);
+  const isBlockItem = item => item.token.kind === 'math' ? item.token.display : ['heading', 'code', 'raw', 'gradeTable'].includes(item.token.kind);
   const isWhitespace = token => (token.kind === 'text' || token.kind === 'metadata') && !doc.source.slice(token.start, token.end).trim();
   const isParagraphBreak = token => isWhitespace(token) && /\n[ \t]*\r?\n/.test(doc.source.slice(token.start, token.end));
   /** Whether two items are on one line of prose, with only inline source between them. */
@@ -960,7 +960,9 @@
     const latex = T.mathForField(token, doc.source);
     const metadata = /\\(?:label|tag|nonumber|notag)\b|(^|[^\\])%/.test(latex);
     let errors = [];
-    try { errors = window.MathLive?.validateLatex?.(latex, { macros: mathLiveMacros() }) || []; } catch { errors = [{ code: 'invalid-command' }]; }
+    const validationLatex = doc.macros['\\fillin']
+      ? latex.replace(/\\fillin\b/g, doc.macros['\\fillin']) : latex;
+    try { errors = window.MathLive?.validateLatex?.(validationLatex, { macros: mathLiveMacros() }) || []; } catch { errors = [{ code: 'invalid-command' }]; }
     if (metadata || errors.some(e => ['unknown-command', 'unknown-environment', 'invalid-command'].includes(e.code))) {
       // Protect labels, comments, package commands and unknown macros from normalization.
       Object.assign(token, { kind: 'raw', contentStart: token.start, contentEnd: token.end });
@@ -1079,10 +1081,59 @@
     });
     return hidden;
   }
+  /** Apply only ordinary, bounded CSS lengths; unknown TeX dimensions stay at a useful default. */
+  function cssLength(value, fallback = '') {
+    if (typeof value !== 'string') return fallback;
+    const match = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+))(em|ex|px|pt|pc|cm|mm|in|rem|%)$/.exec(value.trim());
+    if (!match || Math.abs(Number(match[1])) > 1000) {
+      const relative = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\\(?:textwidth|linewidth)$/.exec(value.trim());
+      if (!relative || Math.abs(Number(relative[1])) > 10) return fallback;
+      return `${Number(relative[1]) * 100}%`;
+    }
+    return match[1] + match[2];
+  }
+  function makeGradeTable(token) {
+    const wrap = document.createElement('div'); wrap.className = 'document-grade-table-wrap';
+    const table = document.createElement('table'); table.className = 'document-table document-grade-table';
+    table.setAttribute('aria-label', 'Grading table');
+    const head = table.createTHead().insertRow();
+    for (const label of ['Question', 'Points', 'Score']) {
+      const th = document.createElement('th'); th.scope = 'col'; th.textContent = label; head.append(th);
+    }
+    const body = table.createTBody();
+    const questions = doc.tokens.filter(t => t.kind === 'examItem' && t.level === 'question');
+    questions.forEach((question, index) => {
+      const row = body.insertRow();
+      row.insertCell().textContent = question.title ? T.decodeText(question.title) : `Question ${index + 1}`;
+      let points = 0, hasPoints = false;
+      const questionIndex = doc.tokens.indexOf(question);
+      const nextQuestion = doc.tokens.findIndex((t, i) => i > questionIndex && t.kind === 'examItem' && t.level === 'question');
+      for (const part of doc.tokens.slice(questionIndex, nextQuestion < 0 ? undefined : nextQuestion)) {
+        if (part.kind !== 'examItem' || (part.level !== 'question' && part.level !== 'part' && part.level !== 'subpart')) continue;
+        const value = Number.parseFloat(part.points);
+        if (Number.isFinite(value)) { points += value; hasPoints = true; }
+      }
+      row.insertCell().textContent = hasPoints ? String(points) : (question.points || '');
+      row.insertCell().textContent = '';
+      row.cells[2].className = 'grade-score-cell';
+    });
+    if (!questions.length) {
+      const row = body.insertRow(); row.insertCell().textContent = 'Question'; row.insertCell();
+      row.insertCell().className = 'grade-score-cell';
+    } else {
+      const total = [...body.rows].reduce((sum, row) => sum + (Number.parseFloat(row.cells[1].textContent) || 0), 0);
+      const row = body.insertRow(); row.insertCell().textContent = 'Total'; row.insertCell().textContent = String(total);
+      row.insertCell().className = 'grade-score-cell';
+    }
+    wrap.append(table);
+    return wrap;
+  }
   /** Build the page from doc.tokens. Returns the scanner's warnings. */
   function buildPage(focus) {
     const scan = T.scanDocument(doc.source);
     doc.tokens = scan.tokens; doc.body = scan.body; doc.macros = T.readMacroDefinitions(doc.source);
+    if (/\\fillin\b/.test(doc.source) && !Object.hasOwn(doc.macros, '\\fillin'))
+      doc.macros['\\fillin'] = '\\underline{\\phantom{0000}}';
     const hidden = invisibleWhitespace(doc.tokens);
     // Keep a prose insertion point where the caret should go but no text is, e.g. after
     // deleting the only equation. It is zero-width, so typing there is an ordinary patch.
@@ -1136,7 +1187,16 @@
           closeRegion(leave()?.region, token);
           continue;
         case 'blockStart': {
-          const block = document.createElement('div'); block.className = 'document-' + token.environment;
+          const block = document.createElement(token.environment === 'Figure' ? 'figure' : 'div');
+          block.className = 'document-' + token.environment;
+          if (['parbox', 'minipage', 'makebox'].includes(token.environment)) {
+            const width = cssLength(token.width || token.options);
+            if (width) block.style.width = width;
+          }
+          if (token.environment === 'scalebox' && token.scale?.trim() && Number.isFinite(Number(token.scale))) {
+            const scale = Math.max(.1, Math.min(5, Number(token.scale)));
+            block.style.setProperty('--document-scale', String(scale));
+          }
           let content = block;
           if (token.environment === 'algorithm-caption') block.append(generated(token.label + '  ', 'algorithm-label'));
           if (token.environment === 'algorithm-line') {
@@ -1163,6 +1223,52 @@
           el.setAttribute('aria-hidden', 'true'); container.append(el);
           continue;
         }
+        case 'examItem': {
+          const wrap = document.createElement('span'); wrap.className = `exam-item exam-item-${token.level || 'question'}`;
+          const marker = document.createElement('span');
+          marker.className = 'exam-marker'; marker.dataset.level = token.level || 'question';
+          marker.setAttribute('aria-label', `${token.level || 'question'} marker`); marker.contentEditable = 'false';
+          if (token.points) {
+            const points = document.createElement('span'); points.className = 'exam-points';
+            points.textContent = ` (${token.points} points)`; marker.append(points);
+          }
+          wrap.append(marker);
+          const editor = makeText(token);
+          editor.classList.add('exam-item-text');
+          wrap.append(editor); container.append(wrap);
+          continue;
+        }
+        case 'blank': {
+          const blank = generated('', 'document-blank');
+          blank.style.width = cssLength(token.width, '3em');
+          blank.setAttribute('aria-label', 'Fill in the blank'); container.append(blank);
+          continue;
+        }
+        case 'hspace': {
+          const space = generated('', 'document-hspace');
+          const width = cssLength(token.spacing, '1em');
+          if (parseFloat(width) < 0) space.style.marginLeft = width;
+          else space.style.width = width;
+          space.setAttribute('aria-label', 'Horizontal space'); container.append(space);
+          continue;
+        }
+        case 'image': {
+          const src = view.assets[token.path];
+          if (typeof src === 'string' && /^data:image\/(?:png|jpeg|webp|gif);base64,/i.test(src)) {
+            const img = document.createElement('img'); img.className = 'document-image'; img.src = src;
+            img.alt = typeof token.alt === 'string' ? token.alt : (String(token.path || '').split(/[\\/]/).pop() || 'Document image');
+            const width = cssLength(token.width);
+            if (width) img.style.width = width;
+            container.append(img);
+          } else {
+            const placeholder = generated(`Image: ${String(token.path || 'unavailable').split(/[\\/]/).pop()}`, 'document-image-placeholder');
+            placeholder.setAttribute('aria-label', 'Image asset is not available'); container.append(placeholder);
+          }
+          continue;
+        }
+        case 'gradeTable':
+          container.append(makeGradeTable(token));
+          continue;
         case 'listStart': {
           const list = document.createElement(token.environment === 'enumerate' ? 'ol' : 'ul');
           list.className = 'document-list';
@@ -1557,6 +1663,14 @@
         case 'focus': ui.active?.mf?.focus(); break;
         case 'selectAll': documentSelection.selectAll(); break;
         case 'sourceChanged': render(); break;
+        case 'assets': {
+          const assets = message.assets && typeof message.assets === 'object' ? message.assets : {};
+          const next = Object.assign(Object.create(null), assets);
+          const keys = Object.keys(next), oldKeys = Object.keys(view.assets);
+          const changed = keys.length !== oldKeys.length || keys.some(key => view.assets[key] !== next[key]);
+          if (changed) { view.assets = next; render(); }
+          break;
+        }
       }
     },
     snapshot: () => ({ source: doc.source, revision: doc.revision, tokens: doc.tokens.map(t => ({ ...t })), active: ui.active?.token.id || null, suggestion: solver.suggestion }),

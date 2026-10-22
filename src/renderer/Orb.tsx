@@ -37,10 +37,12 @@ function VideoOrb({ tone, lowPower }: { tone: OrbTone; lowPower: boolean }) {
   const active = useRenderActive();
   const reducedMotion = useReducedMotion();
   const video = useRef<HTMLVideoElement>(null);
-  const [failed, setFailed] = useState(false);
-  const [loaded, setLoaded] = useState(false);
   const source = `./orb-video/${tone}${lowPower ? '' : '-smooth'}.mp4`;
-  useEffect(() => { setFailed(false); setLoaded(false); }, [source]);
+  // Keyed to the source, so a tone change never shows the old video's state for a frame (a black flash on Windows).
+  const [failedSource, setFailedSource] = useState('');
+  const [loadedSource, setLoadedSource] = useState('');
+  const failed = failedSource === source;
+  const loaded = loadedSource === source;
   useEffect(() => {
     const element = video.current;
     if (!element || failed) return;
@@ -48,7 +50,7 @@ function VideoOrb({ tone, lowPower }: { tone: OrbTone; lowPower: boolean }) {
     element.playbackRate = 11 / PERIOD[tone];
     if (active && !reducedMotion) void element.play().catch(error => {
       // Changing tone or focus can interrupt a pending play; that is expected.
-      if (!cancelled && error.name !== 'AbortError') setFailed(true);
+      if (!cancelled && error.name !== 'AbortError') setFailedSource(source);
     });
     else element.pause();
     return () => { cancelled = true; element.pause(); };
@@ -56,7 +58,7 @@ function VideoOrb({ tone, lowPower }: { tone: OrbTone; lowPower: boolean }) {
   if (failed) return <GlassOrb tone={tone} />;
   return <span className="orb orb-video" style={surfaceStyle(tone)} aria-hidden>
     {!loaded && <span className="swirl" />}
-    <video ref={video} src={source} muted loop playsInline preload="metadata" tabIndex={-1} onLoadedData={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded ? 1 : 0 }} />
+    <video key={source} ref={video} src={source} muted loop playsInline preload="metadata" tabIndex={-1} onLoadedData={() => setLoadedSource(source)} onError={() => setFailedSource(source)} style={{ opacity: loaded ? 1 : 0 }} />
   </span>;
 }
 

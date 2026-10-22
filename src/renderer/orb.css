@@ -92,6 +92,11 @@
   height: 100%;
   object-fit: cover;
   pointer-events: none;
+  /* Clip the video itself: on Windows, Chromium promotes bare videos to DirectComposition overlays, which
+   * ignore the parent's rounded clip (a square video) and can punch through the Mica/acrylic backdrop.
+   * A non-rectangular clip keeps it in normal composition. */
+  border-radius: 50%;
+  clip-path: circle(50%);
 }
 
 /* The glyph on top of the orb. */

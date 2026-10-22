@@ -153,6 +153,29 @@ mark { color: inherit; background: none; }
 .file-row:hover .close-file, .close-file:focus-visible { opacity: 1; }
 .close-file:hover { background: var(--glass-hover); color: var(--ink); }
 
+.rail-left .library-label { padding-right: 8px; margin-top: 14px; }
+.library-actions { display: flex; gap: 2px; margin: -8px 0; }
+.library-actions .icon-button { width: 28px; height: 28px; }
+.file-list.drop-target, .folder.drop-target { background: var(--accent-soft); border-radius: 4px; }
+.file-row[draggable] { cursor: default; }
+.folder { margin-bottom: 3px; border-radius: 4px; transition: background-color .18s; }
+.folder-row { position: relative; border-radius: 4px; }
+.folder-row:hover { background: var(--glass-hover); }
+.folder-toggle { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 34px; padding: 0 36px 0 10px; border-radius: 4px; color: var(--ink-2); font-size: 12.5px; font-weight: 500; text-align: left; }
+.folder-toggle .icon { flex-shrink: 0; }
+.folder-chevron { display: grid; place-items: center; width: 14px; color: var(--ink-3); transition: transform .18s; }
+.folder-chevron.open { transform: rotate(90deg); }
+.folder-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder-toggle small { font: 400 10px/1 var(--mono); color: var(--ink-3); }
+.folder-rename { flex: 1; min-width: 0; height: 24px; padding: 0 6px; margin-left: -6px; border-radius: 4px; border: 0; background: var(--sheet); color: var(--ink); font: inherit; box-shadow: inset 0 0 0 1px var(--rule-2); outline: none; }
+.folder-rename:focus { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.folder-more { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; color: var(--ink-3); opacity: 0; }
+.folder-more .icon { stroke-width: 3; }
+.folder-row:hover .folder-more, .folder-more:focus-visible { opacity: 1; }
+.folder-more:hover { background: var(--glass-hover); color: var(--ink); }
+.folder-files { padding-left: 14px; }
+.folder-empty { padding: 6px 12px 8px 22px; font-size: 11.5px; color: var(--ink-3); }
+
 .file-glyph {
   --kind: var(--k-binary);
   width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
@@ -248,6 +271,7 @@ mark { color: inherit; background: none; }
 .button-primary:hover:not(:disabled) { transform: translateY(-1px); }
 .button-secondary { height: 42px; padding: 0 18px; border-radius: 999px; background: var(--sheet-2); color: var(--ink); font-size: 13px; font-weight: 500; box-shadow: inset 0 0 0 1px var(--rule); }
 .button-secondary:hover { background: var(--sheet-3); }
+.welcome-actions .button-secondary { display: inline-flex; align-items: center; gap: 9px; padding-left: 16px; }
 
 /* Document */
 .document-view { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }

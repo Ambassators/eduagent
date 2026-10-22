@@ -3,11 +3,13 @@ import DOMPurify from 'dompurify';
 import * as pdfjs from 'pdfjs-dist';
 import workerURL from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import 'pdfjs-dist/web/pdf_viewer.css';
-import type { DocumentContent, DocumentInfo, DocumentSource, PDFAnnotations } from '../shared';
+import type { DocumentContent, DocumentInfo, DocumentSource, PDFAnnotations, PDFTextChange } from '../shared';
 import Icon from './Icon';
 import { RichMarkdown } from './RichText';
 import PDFAnnotationLayer from './PDFAnnotationLayer';
 import type { OrbTone } from './Orb';
+import PDFEditLayer from './PDFEditLayer';
+import './pdf-edit.css';
 pdfjs.GlobalWorkerOptions.workerSrc=workerURL;
 type PDFVoice = {tone:OrbTone;label:string;disabled:boolean;onClick:()=>void;onVisible:(visible:boolean)=>void};
 const PDF_DARK_KEY='codex-voice-pdf-dark';
@@ -18,7 +20,7 @@ function readPDFDark():boolean|null {
 export function MarkdownView({text}:{text:string}) {
   return <RichMarkdown text={text}/>;
 }
-function PDFPage({pdf,page,width,zoom,scrollHost,onError,file,annotations,voice}:{pdf:pdfjs.PDFDocumentProxy;page:number;width:number;zoom:number;scrollHost:HTMLDivElement;onError:(message:string)=>void;file:DocumentInfo;annotations:PDFAnnotations;voice:PDFVoice}) {
+function PDFPage({pdf,page,width,zoom,scrollHost,onError,file,annotations,voice,editMode,onEdit,editBusy,pageRatio}:{pdf:pdfjs.PDFDocumentProxy;page:number;width:number;zoom:number;scrollHost:HTMLDivElement;onError:(message:string)=>void;file:DocumentInfo;annotations:PDFAnnotations;voice:PDFVoice;editMode:'replace'|'add'|null;onEdit:(change:PDFTextChange)=>Promise<void>;editBusy:boolean;pageRatio?:number}) {
   const [pdfPage,setPDFPage]=useState<pdfjs.PDFPageProxy|null>(null),[nearViewport,setNearViewport]=useState(false);
   const sheet=useRef<HTMLDivElement>(null),canvas=useRef<HTMLCanvasElement>(null),layer=useRef<HTMLDivElement>(null);
   const errorRef=useRef(onError);errorRef.current=onError;
@@ -54,9 +56,10 @@ function PDFPage({pdf,page,width,zoom,scrollHost,onError,file,annotations,voice}
     return()=>{current=false;if(sheet.current)sheet.current.dataset.textReady='false';render?.cancel();textLayer?.cancel();};
   },[pdfPage,nearViewport,zoom,width]);
   const natural=pdfPage?.getViewport({scale:1});
-  const scaledWidth=width*zoom,scaledHeight=scaledWidth*(natural?natural.height/natural.width:1.414);
-  return <div className="pdf-sheet" ref={sheet} data-page={page} role="region" aria-label={`Page ${page}`} style={{width:scaledWidth,height:scaledHeight}}>
+  const scaledWidth=width*zoom,scaledHeight=scaledWidth*(natural?natural.height/natural.width:pageRatio??11/8.5);
+  return <div className={`pdf-sheet${editMode?' is-editing':''}`} ref={sheet} data-page={page} role="region" aria-label={`Page ${page}`} style={{width:scaledWidth,height:scaledHeight}}>
     {nearViewport&&<><canvas ref={canvas}/><div className="textLayer" ref={layer}/></>}
+    {nearViewport&&editMode&&<PDFEditLayer pdfPage={pdfPage} page={page} width={scaledWidth} height={scaledHeight} mode={editMode} onApply={onEdit} busy={editBusy}/>}
     <PDFAnnotationLayer annotations={annotations} fileId={file.id} revision={file.revision} page={page} width={scaledWidth} height={scaledHeight} tone={voice.tone} voiceLabel={voice.label} voiceDisabled={voice.disabled} onVoiceClick={voice.onClick} onPointerVisible={voice.onVisible} scrollHost={scrollHost} onError={onError}/>
   </div>;
 }
@@ -66,16 +69,21 @@ export default function DocumentViewer({file,onError,annotations,voice,source,da
   const [content,setContent]=useState<DocumentContent|null>(null),[bytes,setBytes]=useState<Uint8Array|null>(null);
   const [page,setPage]=useState(1),[zoom,setZoom]=useState(1),[editing,setEditing]=useState(false),[draft,setDraft]=useState(''),[loading,setLoading]=useState(true);
   const [pdf,setPDF]=useState<pdfjs.PDFDocumentProxy|null>(null),[imageURL,setImageURL]=useState('');
-  const [pdfRevision,setPDFRevision]=useState<number|null>(null);
+  const [pdfRevision,setPDFRevision]=useState<number|null>(null),[bytesRevision,setBytesRevision]=useState<number|null>(null);
   const [hostWidth,setHostWidth]=useState(800);
+  const [pdfEditMode,setPDFEditMode]=useState<'replace'|'add'|null>(null),[pdfEditBusy,setPDFEditBusy]=useState(false),[pdfUndoCount,setPDFUndoCount]=useState(0);
+  const loadedId=useRef<string|null>(null),restoreScroll=useRef<{top:number;left:number}|null>(null),localRevision=useRef(file.revision);
   const [pdfDarkPreference,setPDFDarkPreference]=useState(readPDFDark);
   const pdfDark=pdfDarkPreference??darkMode;
   const pageHost=useRef<HTMLDivElement>(null);
   const errorRef=useRef(onError);errorRef.current=onError;
   useEffect(()=>{
-    let current=true;setLoading(true);setEditing(false);setContent(null);setBytes(null);
+    let current=true;
+    if(loadedId.current!==file.id){loadedId.current=file.id;setLoading(true);setEditing(false);setContent(null);setBytes(null);setPDFEditMode(null);setPDFUndoCount(0);localRevision.current=file.revision;}
+    else if(file.kind!=='pdf'){setLoading(true);setEditing(false);setContent(null);setBytes(null);}
+    else if(pageHost.current&&!restoreScroll.current)restoreScroll.current={top:pageHost.current.scrollTop,left:pageHost.current.scrollLeft};
     void Promise.all([window.desktop!.document(file.id),['pdf','image'].includes(file.kind)?window.desktop!.documentBytes(file.id):Promise.resolve(null)]).then(([next,data])=>{
-      if(!current)return;setContent(next);setDraft(next.text);setBytes(data?new Uint8Array(data):null);setLoading(false);
+      if(!current)return;setContent(next);setDraft(next.text);setBytes(data?new Uint8Array(data):null);setBytesRevision(next.info.revision);setLoading(false);
     }).catch(error=>{if(current){errorRef.current(error.message);setLoading(false);}});
     return()=>{current=false;};
   },[file.id,file.revision]);
@@ -86,12 +94,40 @@ export default function DocumentViewer({file,onError,annotations,voice,source,da
     const url=URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>]));setImageURL(url);return()=>URL.revokeObjectURL(url);
   },[bytes,file.kind]);
   useEffect(()=>{
-    if(file.kind!=='pdf'||!bytes){setPDF(null);setPDFRevision(null);return;}
+    if(file.kind!=='pdf'||!bytes||bytesRevision!==file.revision){setPDF(null);setPDFRevision(null);return;}
     let current=true;
     const task=pdfjs.getDocument({data:bytes.slice(),useSystemFonts:false,standardFontDataUrl:new URL('pdf-assets/standard_fonts/',window.location.href).href,cMapUrl:new URL('pdf-assets/cmaps/',window.location.href).href,wasmUrl:new URL('pdf-assets/wasm/',window.location.href).href});
-    void task.promise.then(document=>{if(current){setPDF(document);setPDFRevision(file.revision);setPage(1);void window.desktop!.setPage(file.id,1).catch(error=>{if(current)errorRef.current(error.message);});}}).catch(error=>{if(current)errorRef.current(error.message);});
+    void task.promise.then(document=>{if(current){setPDF(document);setPDFRevision(file.revision);void window.desktop!.setPage(file.id,page).catch(error=>{if(current)errorRef.current(error.message);});}}).catch(error=>{if(current)errorRef.current(error.message);});
     return()=>{current=false;setPDF(null);setPDFRevision(null);void task.destroy();};
-  },[bytes,file.kind,file.id,file.revision]);
+  },[bytes,bytesRevision,file.kind,file.id,file.revision]);
+  useEffect(()=>{
+    if(!pdf||pdfRevision!==file.revision||!restoreScroll.current)return;
+    const position=restoreScroll.current;restoreScroll.current=null;
+    const frame=requestAnimationFrame(()=>pageHost.current?.scrollTo(position));
+    return()=>cancelAnimationFrame(frame);
+  },[pdf,pdfRevision,file.revision]);
+  useEffect(()=>{
+    if(localRevision.current!==file.revision){localRevision.current=file.revision;setPDFUndoCount(0);}
+  },[file.revision]);
+  async function applyPDFEdit(change:PDFTextChange) {
+    if(pdfEditBusy)return;
+    setPDFEditBusy(true);
+    if(pageHost.current)restoreScroll.current={top:pageHost.current.scrollTop,left:pageHost.current.scrollLeft};
+    try{
+      const next=await window.desktop!.editPDFText(file.id,file.revision,change);
+      localRevision.current=next.info.revision;setContent(next);setPDFUndoCount(count=>count+1);
+    }finally{setPDFEditBusy(false);}
+  }
+  async function undoPDFEdit() {
+    if(pdfEditBusy||!pdfUndoCount)return;
+    setPDFEditBusy(true);
+    if(pageHost.current)restoreScroll.current={top:pageHost.current.scrollTop,left:pageHost.current.scrollLeft};
+    try{
+      const next=await window.desktop!.undoPDFText(file.id,file.revision);
+      localRevision.current=next.info.revision;setContent(next);setPDFUndoCount(count=>Math.max(0,count-1));
+    }catch(error){errorRef.current(error instanceof Error?error.message:String(error));}
+    finally{setPDFEditBusy(false);}
+  }
   function trackPage() {
     const host=pageHost.current;if(!host)return;
     const readingLine=host.getBoundingClientRect().top+Math.min(host.clientHeight/3,200);
@@ -122,7 +158,7 @@ export default function DocumentViewer({file,onError,annotations,voice,source,da
   const annotationCount=annotations.overlays.filter(item=>item.fileId===file.id).length+annotations.highlights.filter(item=>item.fileId===file.id).length+(annotations.pointer?.fileId===file.id?1:0);
   return <div className="document-view" ref={documentRoot}>
     <div className="doc-toolbar drag"><div className="doc-title"><span className={`file-glyph small ${file.kind}`}>{file.extension.slice(1).toUpperCase().slice(0,4)}</span><strong title={file.originalPath||file.name}>{file.name}</strong></div><div className="doc-actions">
-      {file.kind==='pdf'&&<><span className="page-count">{page}<em>/</em>{pdf?.numPages??file.pageCount??'…'}</span>
+      {file.kind==='pdf'&&<><button className="quiet-button" title={pdfEditMode?'Done editing':'Edit PDF'} aria-pressed={pdfEditMode!==null} disabled={pdfEditBusy||!pdf} onClick={()=>setPDFEditMode(mode=>mode?null:'replace')}><Icon name="edit" size={14}/>{pdfEditMode?'Done editing':'Edit PDF'}</button><span className="page-count">{page}<em>/</em>{pdf?.numPages??file.pageCount??'…'}</span>
       {annotationCount>0&&<button className="quiet-button" title="Clear temporary overlays, highlights, and pointing" onClick={()=>void window.desktop!.dismissPDFAnnotation().catch(error=>errorRef.current(error.message))}><Icon name="close" size={14}/>Clear overlays</button>}
       <button className="icon-button pdf-dark-toggle" title={pdfDark?'Turn off dark PDF pages':'Turn on dark PDF pages'} aria-label="Dark PDF pages" aria-pressed={pdfDark} onClick={togglePDFDark}><Icon name="moon" size={16}/></button>
       <div className="control-group"><button title="Zoom out" aria-label="Zoom out" disabled={zoom<=.5} onClick={()=>setZoom(old=>Math.max(.5,old-.15))}><Icon name="minus" size={14}/></button><span>{Math.round(zoom*100)}%</span><button title="Zoom in" aria-label="Zoom in" disabled={zoom>=2} onClick={()=>setZoom(old=>Math.min(2,old+.15))}><Icon name="plus" size={14}/></button></div></>}
@@ -130,9 +166,10 @@ export default function DocumentViewer({file,onError,annotations,voice,source,da
       <button className="quiet-button" title="Save copy" onClick={()=>void window.desktop!.saveDocument(file.id,false).catch(error=>errorRef.current(error.message))}><Icon name="download" size={14}/>Save copy</button>
       {file.dirty&&file.originalPath&&<button className="quiet-button strong" title="A timestamped backup is created first" onClick={()=>void window.desktop!.saveDocument(file.id,true).catch(error=>errorRef.current(error.message))}><Icon name="save" size={14}/>Save original</button>}
     </div></div>
+    {file.kind==='pdf'&&pdfEditMode&&<div className="pdf-edit-toolbar" role="toolbar" aria-label="PDF editing tools"><div className="control-group"><button title="Change text" aria-pressed={pdfEditMode==='replace'} disabled={pdfEditBusy} onClick={()=>setPDFEditMode('replace')}>Change text</button><button title="Add text" aria-pressed={pdfEditMode==='add'} disabled={pdfEditBusy} onClick={()=>setPDFEditMode('add')}>Add text</button></div><span>{pdfEditMode==='replace'?'Click text on the page to change it':'Click on the page to add an answer or note'}</span><button className="quiet-button" disabled={pdfEditBusy||!pdfUndoCount} onClick={()=>void undoPDFEdit()}>Undo</button></div>}
     {file.warning&&<div className="document-warning">{file.warning}</div>}
     {loading?<div className="viewer-loading"><span className="loading-ring"/></div>:editing?<div className="text-editor"><textarea aria-label="Edit document text" spellCheck={false} value={draft} onChange={event=>setDraft(event.target.value)}/><div><span/><button className="button-primary" onClick={()=>void saveDraft()}><Icon name="check" size={15}/>Apply changes</button></div></div>:
-      file.kind==='pdf'?<div className={`pdf-scroll${pdfDark?' pdf-dark':''}`} ref={pageHost} data-file-id={file.id} data-revision={file.revision} onScroll={trackPage}>{pdf&&pdfRevision===file.revision&&pageHost.current?Array.from({length:pdf.numPages},(_,index)=><PDFPage key={`${file.id}-${file.revision}-${index}`} pdf={pdf} page={index+1} width={Math.max(200,Math.min(840,hostWidth-56))} zoom={zoom} scrollHost={pageHost.current!} onError={onError} file={file} annotations={annotations} voice={voice}/>):<div className="viewer-loading"><span className="loading-ring"/></div>}</div>:
+      file.kind==='pdf'?<div className={`pdf-scroll${pdfDark?' pdf-dark':''}`} ref={pageHost} data-file-id={file.id} data-revision={file.revision} onScroll={trackPage}>{pdf&&pdfRevision===file.revision&&pageHost.current?Array.from({length:pdf.numPages},(_,index)=><PDFPage key={`${file.id}-${file.revision}-${index}`} pdf={pdf} page={index+1} width={Math.max(200,Math.min(840,hostWidth-56))} zoom={zoom} scrollHost={pageHost.current!} onError={onError} file={file} annotations={annotations} voice={voice} editMode={pdfEditMode} onEdit={applyPDFEdit} editBusy={pdfEditBusy} pageRatio={content?.pages?.[index] ? content.pages[index].height/content.pages[index].width : undefined}/>):<div className="viewer-loading"><span className="loading-ring"/></div>}</div>:
       file.kind==='image'?<div className="image-preview"><img src={imageURL} alt={file.name}/></div>:
       file.kind==='binary'?<div className="unsupported-preview"><span className={`file-glyph large ${file.kind}`}>{file.extension.slice(1).toUpperCase().slice(0,4)}</span><h2>{file.name}</h2><p>No preview · {(file.size/1024).toFixed(1)} KB</p></div>:
       file.kind==='html'&&['.html','.htm'].includes(file.extension)?<iframe className="document-demo" title={file.name} sandbox="allow-scripts" src={`codex-presentation://${file.id}/document?revision=${file.revision}`}/>:

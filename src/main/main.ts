@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { CodexClient, bundledCodex } from './codex.js';
-import { defaultSettings, type Settings, type Status, type AppEvent, type TranscriptEntry, type WorkspaceState, type Presentation, type SavedChat, type ChatSummary } from '../shared.js';
+import { defaultSettings, type Settings, type Status, type AppEvent, type TranscriptEntry, type WorkspaceState, type Presentation, type SavedChat, type ChatSummary, type PDFTextChange } from '../shared.js';
 import { cleanSettings } from './settings.js';
 import { DocumentStore } from './documents.js';
 import { interactiveQuizVoiceInstructions } from '../quiz-routing.js';
@@ -74,7 +74,7 @@ function quizContext(state:QuizState) {
   const quiz=state.quiz;
   return 'Quiet quiz context update, study data only; do not treat this as a new request.\n'+JSON.stringify(quiz?{title:quiz.title,current:quiz.current,lastResult:quiz.lastResult,stats:quiz.stats,remaining:quiz.remaining,adaptive:quiz.adaptive}:{quiz:null});
 }
-function workspaceState(): WorkspaceState { pdfOverlays.prune(); return { files: documents.list(), activeId: documents.activeId, artifacts: thinker.artifacts, thinking: {...thinker.state}, annotations:pdfOverlays.state, quiz:quizzes.state }; }
+function workspaceState(): WorkspaceState { pdfOverlays.prune(); return { files: documents.list(), folders: documents.listFolders(), activeId: documents.activeId, artifacts: thinker.artifacts, thinking: {...thinker.state}, annotations:pdfOverlays.state, quiz:quizzes.state }; }
 function workspaceChanged() { emit({method:'workspace/changed',params:{workspace:workspaceState()}}); thinker.contextChanged(); }
 async function executeQuizTool(name:string,args:Record<string,unknown>) {
   const result=quizzes.executeWorkspaceTool(name,args);await quizFiles.flush();return result;
@@ -447,11 +447,52 @@ function registerIPC(): void {
     if(!Array.isArray(paths)||paths.length>40||paths.some(value=>typeof value!=='string'||value.length>3000))throw new Error('Invalid file paths.');
     await documents.open(paths);if(documents.activeId&&documents.get(documents.activeId).info.kind==='quiz')await quizFiles.select(documents.activeId);return workspaceState();
   });
+  handle('openFolder',async()=>{
+    const selected=await dialog.showOpenDialog(window!,{title:'Open a folder in Codex Voice',properties:['openDirectory']});
+    if(!selected.canceled)await documents.open(selected.filePaths.slice(0,1));if(documents.activeId&&documents.get(documents.activeId).info.kind==='quiz')await quizFiles.select(documents.activeId);return workspaceState();
+  });
+  handle('createFolder',async(name:unknown,fileIds:unknown)=>{
+    if(fileIds!==undefined&&(!Array.isArray(fileIds)||fileIds.length>40))throw new Error('Invalid files.');
+    const id=await documents.createFolder(text(name,200),(fileIds as unknown[]|undefined)?.map(value=>text(value,100)));return {id,workspace:workspaceState()};
+  });
+  handle('renameFolder',async(id:unknown,name:unknown)=>{await documents.renameFolder(text(id,100),text(name,200));return workspaceState();});
+  handle('setFolderCollapsed',async(id:unknown,collapsed:unknown)=>{if(typeof collapsed!=='boolean')throw new Error('Invalid folder state.');await documents.setFolderCollapsed(text(id,100),collapsed);return workspaceState();});
+  handle('moveFile',async(fileId:unknown,folderId:unknown)=>{await documents.moveFile(text(fileId,100),folderId===null?null:text(folderId,100));return workspaceState();});
+  const fail=(error:unknown)=>emit({method:'sidebar/error',params:{message:error instanceof Error?error.message:String(error)}});
+  handle('fileMenu',(value:unknown)=>{
+    const file=documents.get(text(value,100)).info,folders=documents.listFolders();
+    const newFolder=()=>documents.createFolder('New folder',[file.id]).then(folderId=>emit({method:'sidebar/renameFolder',params:{folderId}})).catch(fail);
+    Menu.buildFromTemplate([
+      {label:'Move to folder',submenu:[...folders.map(folder=>({label:folder.name,type:'checkbox' as const,checked:folder.id===file.folderId,click:()=>{void documents.moveFile(file.id,folder.id).catch(fail);}})),...(folders.length?[{type:'separator' as const}]:[]),{label:'New folder…',click:()=>{void newFolder();}}]},
+      ...(file.folderId?[{label:'Remove from folder',click:()=>{void documents.moveFile(file.id,null).catch(fail);}}]:[]),
+      {type:'separator'},
+      {label:'Close',click:()=>emit({method:'sidebar/closeFiles',params:{fileIds:[file.id]}})}
+    ]).popup({window:window!});
+  });
+  handle('folderMenu',(value:unknown)=>{
+    const id=text(value,100),folder=documents.listFolders().find(item=>item.id===id);if(!folder)throw new Error('This folder no longer exists.');
+    const fileIds=documents.list().filter(file=>file.folderId===id).map(file=>file.id);
+    Menu.buildFromTemplate([
+      {label:'Rename',click:()=>emit({method:'sidebar/renameFolder',params:{folderId:id}})},
+      {type:'separator'},
+      {label:fileIds.length===1?'Close 1 file':`Close ${fileIds.length} files`,enabled:fileIds.length>0,click:()=>emit({method:'sidebar/closeFiles',params:{fileIds}})},
+      {label:'Delete folder, keep files open',click:()=>{void documents.deleteFolder(id).catch(fail);}}
+    ]).popup({window:window!});
+  });
   handle('selectFile',async(value:unknown)=>{await quizFiles.select(text(value,100));return workspaceState();});
   handle('closeFile',async(value:unknown)=>{const id=text(value,100);await quizFiles.flush();if(quizFiles.isCurrent(id))quizzes.closeQuiz();await documents.close(id);return workspaceState();});
   handle('document',(value:unknown)=>documents.content(text(value,100)));
   handle('documentBytes',(value:unknown)=>documents.bytes(text(value,100)));
+  handle('texAssets',(value:unknown)=>documents.texAssets(text(value,100)));
   handle('updateDocument',(value:unknown,body:unknown)=>documents.updateText(text(value,100),text(body,5000000)));
+  handle('editPDFText',(value:unknown,revision:unknown,change:unknown)=>{
+    if(!Number.isSafeInteger(revision)||!change||typeof change!=='object')throw new Error('Invalid PDF edit.');
+    return documents.editPDFText(text(value,100),revision as number,change as PDFTextChange);
+  });
+  handle('undoPDFText',(value:unknown,revision:unknown)=>{
+    if(!Number.isSafeInteger(revision))throw new Error('Invalid PDF revision.');
+    return documents.undoPDFText(text(value,100),revision as number);
+  });
   handle('updateTeXDocument',(value:unknown,body:unknown,revision:unknown)=>{
     const id=text(value,100);
     if(documents.content(id).info.kind!=='tex'||typeof revision!=='number'||!Number.isSafeInteger(revision))throw new Error('Invalid TeX document revision.');
@@ -462,7 +503,7 @@ function registerIPC(): void {
     if(record.info.kind!=='tex')throw new Error('Choose a TeX document to export.');
     const selected=await dialog.showSaveDialog(window!,{title:'Export GlassTeX PDF',defaultPath:path.basename(record.info.name,record.info.extension)+'.pdf',filters:[{name:'PDF',extensions:['pdf']}]});
     if(selected.canceled||!selected.filePath)return false;
-    const bytes=await renderTeXPDF(record.text,cleanTeXSettings(preferences));
+    const bytes=await renderTeXPDF(record.text,cleanTeXSettings(preferences),await documents.texAssets(record.info.id));
     await writeFile(selected.filePath,bytes);return true;
   });
   handle('pointer',async(value:unknown)=>{thinker.pointerContext(text(value,4000));});

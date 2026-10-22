@@ -156,6 +156,13 @@ export default function GlassTeXEditor({ file, sidebar, onError, onOpenFiles, so
   }, [file.revision, loaded]);
   useEffect(() => { if (ready) { receive({ action: 'settings', settings }); receive({ action: 'commands', commands }); } localStorage.setItem('glasstex.settings', JSON.stringify(settings)); }, [settings, ready]);
   useEffect(() => { if (ready) send('renderActivity', renderActive); }, [ready, renderActive]);
+  useEffect(() => {
+    if (!loaded || !ready || !window.desktop?.texAssets) return;
+    let current = true;
+    void window.desktop.texAssets(file.id).then(assets => { if (current) receive({ action: 'assets', assets }); })
+      .catch(error => { if (current) setNotice(errorMessage(error)); });
+    return () => { current = false; };
+  }, [file.id, file.revision, loaded, ready]);
   useEffect(() => { if (ready) receive({ action: 'commands', commands }); localStorage.setItem('glasstex.commands', JSON.stringify(custom)); localStorage.setItem('glasstex.shortcuts', JSON.stringify(shortcuts)); }, [custom, shortcuts, ready]);
   useEffect(() => { list.current?.scrollTo(0, 0); }, [query, category]);
   useEffect(() => { if (loaded && ready && !sourceMode) syncDocument(); }, [sourceMode, loaded, ready]);

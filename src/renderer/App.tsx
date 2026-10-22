@@ -1,7 +1,7 @@
 import BrowserPanel from './BrowserPanel';
 import type { BrowserState } from '../browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { defaultSettings, type AppEvent, type DesktopAPI, type DocumentInfo, type DocumentSource, type Settings, type Status, type TranscriptEntry, type WorkspaceState, type ToolActivity, type PDFToolRequest, type DebugLog, type ChatSummary } from '../shared';
+import { defaultSettings, type AppEvent, type DesktopAPI, type DocumentFolder, type DocumentInfo, type DocumentSource, type Settings, type Status, type TranscriptEntry, type WorkspaceState, type ToolActivity, type PDFToolRequest, type DebugLog, type ChatSummary } from '../shared';
 import { VoiceSession, type LiveEvent } from './voice';
 import { CaptionGroups, EchoFilter } from './voice-input';
 import { pointerContext } from './pointer-context';
@@ -48,6 +48,10 @@ export default function App() {
   const [sourceTarget,setSourceTarget]=useState<DocumentSource|null>(null);
   const [texSidebar,setTeXSidebar]=useState<HTMLDivElement|null>(null);
   const workspaceRef=useRef(workspace);workspaceRef.current=workspace;
+  const [renamingFolder,setRenamingFolder]=useState<string|null>(null);
+  const renamingRef=useRef<string|null>(null);
+  const startRename=(id:string|null)=>{renamingRef.current=id;setRenamingFolder(id);};
+  const [dropTarget,setDropTarget]=useState<string|null>(null);
   const [pointerVisible,setPointerVisible]=useState(false);
   const [logsOn,setLogsOn]=useState(readLogsPref);
   const [paneSizes,setPaneSizes]=useState(readPaneSizes);
@@ -266,6 +270,9 @@ export default function App() {
       switch (event.method) {
         case 'browser/state': { const state=p.state as unknown as BrowserState;setBrowserState(state);if(state.tabs.length>browserCount.current)void flushTeX().then(()=>setBrowserVisible(true)).catch(e=>setError(errorMessage(e)));browserCount.current=state.tabs.length;break; }
         case 'workspace/changed':setWorkspace(p.workspace as unknown as WorkspaceState);break;
+        case 'sidebar/renameFolder':startRename(String(p.folderId));break;
+        case 'sidebar/closeFiles':void(async()=>{for(const id of p.fileIds as string[]){await flushTeX(id);setWorkspace(await api().closeFile(id));}})().catch(e=>setError(errorMessage(e)));break;
+        case 'sidebar/error':setError(String(p.message));break;
         case 'workspace/fileShown':setBrowserVisible(false);setPresentationId(null);break;
         case 'workspace/annotations':setWorkspace(old=>old?{...old,annotations:p.annotations as unknown as WorkspaceState['annotations']}:old);break;
         case 'document/source':setSourceTarget(p.source as unknown as DocumentSource);setBrowserVisible(false);break;
@@ -479,7 +486,8 @@ export default function App() {
   const lastThink=thinkMessages[thinkMessages.length-1];
   const thinkPreview=lastThink?.role==='assistant'&&!lastThink.final?lastThink.text:'';
   async function openFiles(){setBrowserVisible(false);setOpening(true);setError('');try{await flushTeX();setWorkspace(await api().openFiles());}catch(e){setError(errorMessage(e));}finally{setOpening(false);}}
-  async function dropFiles(event:React.DragEvent){event.preventDefault();setDropActive(false);setOpening(true);try{const paths=[...event.dataTransfer.files].map(file=>api().filePath(file)).filter(Boolean);await flushTeX();if(paths.length)setWorkspace(await api().openPaths(paths));}catch(e){setError(errorMessage(e));}finally{setOpening(false);}}
+  async function openFolder(){setBrowserVisible(false);setOpening(true);setError('');try{await flushTeX();setWorkspace(await api().openFolder());}catch(e){setError(errorMessage(e));}finally{setOpening(false);}}
+  async function dropFiles(event:React.DragEvent){event.preventDefault();setDropActive(false);if(!event.dataTransfer.types.includes('Files'))return;setOpening(true);try{const paths=[...event.dataTransfer.files].map(file=>api().filePath(file)).filter(Boolean);await flushTeX();if(paths.length)setWorkspace(await api().openPaths(paths));}catch(e){setError(errorMessage(e));}finally{setOpening(false);}}
   const contextPercent=Math.min(100,(thinking?.tokens??0)/draft.compactAtTokens*100);
   // One timeline: spoken and typed turns, Think's answers, and (with Logs on) what ran in between.
   // Think's own copy of each request is skipped; the request already shows as the user's turn or as a route log.
@@ -491,9 +499,29 @@ export default function App() {
   const platform=status?.platform??(navigator.userAgent.includes('Mac')?'darwin':'win32');
   const mod=platform==='darwin'?'⌘':'Ctrl ';
   const openSettings=()=>{const initial={...(status?.settings??defaultSettings)};settingsStart.current=initial;settingsDraft.current=initial;setDraft(initial);settingsErrorRef.current='';setSettingsError('');settingsOpenRef.current=true;setSettingsOpen(true);};
+  const newFolder=()=>void api().createFolder('New folder').then(({id,workspace})=>{setWorkspace(workspace);startRename(id);}).catch(e=>setError(errorMessage(e)));
+  const toggleFolder=(folder:DocumentFolder)=>void api().setFolderCollapsed(folder.id,!folder.collapsed).then(setWorkspace).catch(e=>setError(errorMessage(e)));
+  /** Enter and blur both commit; the ref makes the first one win. A null value cancels. */
+  const finishRename=(folder:DocumentFolder,value:string|null)=>{if(renamingRef.current!==folder.id)return;startRename(null);const name=value?.trim();if(!name||name===folder.name)return;void api().renameFolder(folder.id,name).then(setWorkspace).catch(e=>setError(errorMessage(e)));};
+  /** Sidebar drags carry the file id under this type, so they never look like a file drop from the OS. */
+  const FILE_DRAG='application/x-codex-voice-file';
+  const allowMove=(target:string)=>(event:React.DragEvent)=>{if(!event.dataTransfer.types.includes(FILE_DRAG))return;event.preventDefault();event.stopPropagation();event.dataTransfer.dropEffect='move';setDropTarget(target);};
+  const dropMove=(folderId:string|null)=>(event:React.DragEvent)=>{
+    if(!event.dataTransfer.types.includes(FILE_DRAG))return;
+    event.preventDefault();event.stopPropagation();setDropTarget(null);
+    const file=workspace?.files.find(item=>item.id===event.dataTransfer.getData(FILE_DRAG));
+    if(file&&(file.folderId??null)!==folderId)void api().moveFile(file.id,folderId).then(setWorkspace).catch(e=>setError(errorMessage(e)));
+  };
   const selectFile=(id:string)=>void flushTeX().then(()=>{setBrowserVisible(false);return api().selectFile(id);}).then(setWorkspace).catch(e=>setError(errorMessage(e)));
   const closeFile=(id:string)=>void flushTeX(id).then(()=>api().closeFile(id)).then(setWorkspace).catch(e=>setError(errorMessage(e)));
   const fileMeta=(file:DocumentInfo)=>file.dirty?'Edited copy':file.pageCount?`${file.pageCount} ${file.pageCount===1?'page':'pages'}`:file.kind==='binary'?`${Math.max(1,Math.round(file.size/1024))} KB`:file.kind;
+  const fileRow=(file:DocumentInfo)=><div className={`file-row ${file.id===workspace?.activeId?'active':''}`} key={file.id} draggable onDragStart={event=>{event.dataTransfer.setData(FILE_DRAG,file.id);event.dataTransfer.effectAllowed='move';}} onDragEnd={()=>setDropTarget(null)} onContextMenu={event=>{event.preventDefault();void api().fileMenu(file.id).catch(e=>setError(errorMessage(e)));}}>
+    <button className="file-select" onClick={()=>selectFile(file.id)} aria-current={file.id===workspace?.activeId?'true':undefined} title={file.originalPath||file.name}>
+      <span className={`file-glyph ${file.kind}`}>{file.extension.slice(1).toUpperCase().slice(0,4)||'—'}</span>
+      <span className="file-text"><strong>{file.name}</strong><small>{file.dirty&&<i className="dirty-dot"/>}{fileMeta(file)}</small></span>
+    </button>
+    <button className="close-file" aria-label={`Close ${file.name}`} title="Close" onClick={()=>closeFile(file.id)}><Icon name="close" size={12}/></button>
+  </div>;
   const live=sessionOn&&phase!=='starting';
   const tone:OrbTone=!sessionOn||phase==='standby'?'idle':phase==='starting'?'connecting':phase==='speaking'?'speaking':phase==='thinking'?'capturing':'on';
   const materials:[Settings['transparency'],string][]=platform==='win32'?[['acrylic','Acrylic'],['mica','Mica'],['opaque','Opaque']]:[['acrylic','Glass'],['opaque','Opaque']];
@@ -511,14 +539,28 @@ export default function App() {
         {browserVisible&&<button className="rail-action" onClick={()=>setBrowserVisible(false)}><Icon name="file" size={15}/>Documents</button>}
         <div className={`rail-library-stack ${!browserVisible&&activeFile?.kind==='tex'?'with-tex':''}`}>
         <div className="rail-section library">
-          <div className="file-list">
-            {workspace?.files.map(file=><div className={`file-row ${file.id===workspace.activeId?'active':''}`} key={file.id}>
-              <button className="file-select" onClick={()=>selectFile(file.id)} aria-current={file.id===workspace.activeId?'true':undefined} title={file.originalPath||file.name}>
-                <span className={`file-glyph ${file.kind}`}>{file.extension.slice(1).toUpperCase().slice(0,4)||'—'}</span>
-                <span className="file-text"><strong>{file.name}</strong><small>{file.dirty&&<i className="dirty-dot"/>}{fileMeta(file)}</small></span>
-              </button>
-              <button className="close-file" aria-label={`Close ${file.name}`} title="Close" onClick={()=>closeFile(file.id)}><Icon name="close" size={12}/></button>
-            </div>)}
+          <div className="section-label library-label"><span>Files</span><span className="library-actions">
+            <button className="icon-button" title="New folder" aria-label="New folder" onClick={newFolder}><Icon name="folder-plus" size={15}/></button>
+            <button className="icon-button" title="Open a folder from disk" aria-label="Open a folder from disk" onClick={()=>void openFolder()} disabled={opening}><Icon name="folder-open" size={15}/></button>
+          </span></div>
+          <div className={`file-list ${dropTarget==='root'?'drop-target':''}`} onDragOver={allowMove('root')} onDrop={dropMove(null)} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node))setDropTarget(null);}}>
+            {workspace?.folders.map(folder=>{
+              const files=workspace.files.filter(file=>file.folderId===folder.id);
+              return <div className={`folder ${dropTarget===folder.id?'drop-target':''}`} key={folder.id} onDragOver={allowMove(folder.id)} onDrop={dropMove(folder.id)}>
+                <div className="folder-row" onContextMenu={event=>{event.preventDefault();void api().folderMenu(folder.id).catch(e=>setError(errorMessage(e)));}}>
+                  {renamingFolder===folder.id?<div className="folder-toggle">
+                    <span className="folder-chevron open"><Icon name="right" size={12}/></span><Icon name="folder" size={15}/>
+                    <input className="folder-rename" autoFocus defaultValue={folder.name} maxLength={80} aria-label="Folder name" onFocus={event=>event.currentTarget.select()} onKeyDown={event=>{if(event.key==='Enter')finishRename(folder,event.currentTarget.value);else if(event.key==='Escape')finishRename(folder,null);}} onBlur={event=>finishRename(folder,event.currentTarget.value)}/>
+                  </div>:<button className="folder-toggle" aria-expanded={!folder.collapsed} title={folder.path??folder.name} onClick={()=>toggleFolder(folder)}>
+                    <span className={`folder-chevron ${folder.collapsed?'':'open'}`}><Icon name="right" size={12}/></span><Icon name="folder" size={15}/>
+                    <span className="folder-name">{folder.name}</span><small>{files.length}</small>
+                  </button>}
+                  {renamingFolder!==folder.id&&<button className="folder-more" aria-label={`${folder.name} options`} title="Folder options" onClick={()=>void api().folderMenu(folder.id).catch(e=>setError(errorMessage(e)))}><Icon name="more" size={14}/></button>}
+                </div>
+                {!folder.collapsed&&<div className="folder-files">{files.map(fileRow)}{!files.length&&<div className="folder-empty">Drag files here</div>}</div>}
+              </div>;
+            })}
+            {workspace?.files.filter(file=>!file.folderId).map(fileRow)}
           </div>
         </div>
         {!browserVisible&&activeFile?.kind==='tex'&&<div className="rail-tex-slot"><ResizeHandle edge="top" min={160} shrinks=".rail-library-stack > .library" keep={60} label="Resize GlassTeX panel" onResize={resizePane('tex')}/><div className="rail-tex-portal" ref={setTeXSidebar}/></div>}
@@ -544,7 +586,7 @@ export default function App() {
           {browserVisible?<BrowserPanel state={browserState} blocked={settingsOpen||historyOpen||dropActive||!!presentation||!!error||!!notice||!!status?.warning||appUpdates.visible} onError={setError}/>:activeFile?activeFile.kind==='quiz'?<QuizDocument file={activeFile} state={workspace!.quiz} onClose={()=>closeFile(activeFile.id)} onError={setError}/>:activeFile.kind==='tex'?<GlassTeXEditor key={activeFile.id} file={activeFile} sourceTarget={sourceTarget} sidebar={texSidebar} onError={setError} onOpenFiles={()=>void openFiles()}/>:<DocumentViewer key={activeFile.id} file={activeFile} darkMode={status?.darkMode??false} source={sourceTarget} onError={setError} annotations={workspace!.annotations} voice={{tone,label:buttonLabel,disabled:!sessionOn&&(!signedIn||!status?.voiceAvailable||loading),onClick:()=>void primary().catch(e=>setError(errorMessage(e))),onVisible:setPointerVisible}}/>:<div className="welcome">
             <div className="welcome-inner">
               <h1>Open something.<br/><mark>Talk it through.</mark></h1>
-              <div className="welcome-actions"><button className="button-primary" onClick={()=>void openFiles()} disabled={opening}><Icon name="folder" size={16}/>Open a file</button></div>
+              <div className="welcome-actions"><button className="button-primary" onClick={()=>void openFiles()} disabled={opening}><Icon name="file" size={16}/>Open a file</button><button className="button-secondary" onClick={()=>void openFolder()} disabled={opening}><Icon name="folder" size={16}/>Open a folder</button></div>
             </div>
           </div>}
           {(error||notice||status?.warning)&&<div className={`toast ${error?'error':''}`} role={error?'alert':'status'}><i/><span>{error||notice||status?.warning}</span><button className="icon-button" aria-label="Dismiss" onClick={()=>{setError('');setNotice('');setStatus(old=>old?{...old,warning:undefined}:old);}}><Icon name="close" size={13}/></button></div>}
@@ -653,7 +695,7 @@ export default function App() {
         </div>
         <h4>Context and speed</h4>
         <div className="settings-grid">
-          <label className="field"><span>Compact context at</span><input type="number" min={8000} max={700000} step={4000} value={draft.compactAtTokens} onChange={event=>updateSettings({compactAtTokens:Number(event.target.value)},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
+          <label className="field"><span>Compact context at</span><NumberSetting min={8000} max={700000} step={4000} value={draft.compactAtTokens} open={settingsOpen} onValue={value=>updateSettings({compactAtTokens:value},false)} onCommit={()=>persistSettings(settingsDraft.current)}/></label>
           <label className="check-setting"><input type="checkbox" checked={draft.autoCompact} onChange={event=>updateSettings({autoCompact:event.target.checked})}/><span>Auto compact</span></label>
           <label className="check-setting"><input type="checkbox" checked={draft.priority} onChange={event=>updateSettings({priority:event.target.checked})}/><span>Fast / Priority</span></label>
         </div>
@@ -668,10 +710,10 @@ export default function App() {
         <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.bridgeResearch} onChange={event=>updateSettings({bridgeResearch:event.target.checked})}/><span>Voice research<small>Voice can read open files and search the web for quick answers. Bigger work still goes to Think.</small></span></label>
         <h4>Usage saving (experimental)</h4>
         <div className="settings-grid">
-          <label className="field" title="Closes the live voice connection after this much quiet to save usage; talking reconnects it. 0 keeps it open."><span>Standby after (seconds, 0 = never)</span><input type="number" min={0} max={600} step={15} value={draft.standbyAfterSeconds} onChange={event=>updateSettings({standbyAfterSeconds:Number(event.target.value)},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
+          <label className="field" title="Closes the live voice connection after this much quiet to save usage; talking reconnects it. 0 keeps it open."><span>Standby after (seconds, 0 = never)</span><NumberSetting min={0} max={600} step={15} value={draft.standbyAfterSeconds} open={settingsOpen} onValue={value=>updateSettings({standbyAfterSeconds:value},false)} onCommit={()=>persistSettings(settingsDraft.current)}/></label>
           <label className="field" title="How what you said while it reconnected reaches the voice. Real time adds the reconnect time to the first reply. Faster replays at 1.3× (slightly higher pitch) until caught up. Burst sends it all at once through an experimental Codex call and falls back to real time if that fails."><span>Catch-up after standby</span><select value={draft.voiceCatchUp} onChange={event=>updateSettings({voiceCatchUp:event.target.value as Settings['voiceCatchUp']})}><option value="realtime">Replay in real time</option><option value="fast">Replay faster (1.3×)</option><option value="burst">Send as burst (experimental)</option></select></label>
-          <label className="field" title="How much speech it needs to hear before waking from standby. Higher ignores coughs and short noises."><span>Wake after speech of (ms)</span><input type="number" min={100} max={2000} step={50} value={draft.standbyWakeMs} onChange={event=>updateSettings({standbyWakeMs:Number(event.target.value)},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
-          <label className="field" title="If a wake hears no words within this time, it goes back to standby. 0 turns it off."><span>Re-sleep on false wake (seconds, 0 = off)</span><input type="number" min={0} max={120} step={5} value={draft.standbyFalseWakeSeconds} onChange={event=>updateSettings({standbyFalseWakeSeconds:Number(event.target.value)},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
+          <label className="field" title="How much speech it needs to hear before waking from standby. Higher ignores coughs and short noises."><span>Wake after speech of (ms)</span><NumberSetting min={100} max={2000} step={50} value={draft.standbyWakeMs} open={settingsOpen} onValue={value=>updateSettings({standbyWakeMs:value},false)} onCommit={()=>persistSettings(settingsDraft.current)}/></label>
+          <label className="field" title="If a wake hears no words within this time, it goes back to standby. 0 turns it off."><span>Re-sleep on false wake (seconds, 0 = off)</span><NumberSetting min={0} max={120} step={5} value={draft.standbyFalseWakeSeconds} open={settingsOpen} onValue={value=>updateSettings({standbyFalseWakeSeconds:value},false)} onCommit={()=>persistSettings(settingsDraft.current)}/></label>
         </div>
         <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.voiceAckFiller} onChange={event=>updateSettings({voiceAckFiller:event.target.checked})}/><span>Spoken “let me check” filler<small>Off skips the acknowledgement voice says before handing a request to the bridge. Applies from the next voice connection.</small></span></label>
         <label className="field wide"><span>Voice instructions</span><textarea rows={4} maxLength={8000} value={draft.prompt} onChange={event=>updateSettings({prompt:event.target.value},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
@@ -683,6 +725,17 @@ export default function App() {
       <footer className="dialog-footer"><span role="status">{saving?'Saving…':settingsError?'Changes not saved':'Changes save automatically'}</span><button className="button-secondary" title="Restore settings from when you opened preferences" disabled={JSON.stringify(draft)===JSON.stringify(settingsStart.current)&&!settingsError} onClick={()=>{const initial={...settingsStart.current};settingsDraft.current=initial;setDraft(initial);persistSettings(initial);}}>Undo</button><button className="button-primary" onClick={()=>void closeSettings()}>Done</button></footer>
     </dialog>
   </div></LowPowerContext.Provider>;
+}
+
+function NumberSetting({value,open,min,max,step,onValue,onCommit}:{value:number;open:boolean;min:number;max:number;step:number;onValue:(value:number)=>void;onCommit:()=>void}) {
+  // Keep the typed text so clearing the field doesn't snap to 0 mid-edit; an empty field becomes 0 when preferences close.
+  const [text,setText]=useState(String(value));
+  useEffect(()=>{ setText(old=>open&&(old.trim()===''?value===0:Number(old)===value)?old:String(value)); },[value,open]);
+  return <input type="number" min={min} max={max} step={step} value={text} onChange={event=>{
+    const raw=event.target.value; setText(raw);
+    if (raw.trim()==='') onValue(0);
+    else if (Number.isFinite(Number(raw))) onValue(Number(raw));
+  }} onBlur={()=>{ if (text.trim()!=='') onCommit(); }}/>;
 }
 
 function Message({entry,source}:ChatMessage) {

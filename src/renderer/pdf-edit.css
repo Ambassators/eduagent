@@ -1,0 +1,151 @@
+.pdf-sheet.is-editing { overflow:visible; }
+.pdf-edit-toolbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:8px 14px; border-bottom:1px solid var(--rule); background:var(--sheet); font-size:12px; flex-shrink:0; }
+.pdf-edit-toolbar > span { flex:1; color:var(--ink-3); min-width:160px; }
+.pdf-edit-toolbar .control-group button { width:auto; padding:5px 9px; font:inherit; }
+.pdf-edit-toolbar button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
+.pdf-edit-toolbar > button { font:inherit; padding:5px 9px; }
+.pdf-edit-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+  font: 13px/1.4 system-ui, sans-serif;
+}
+.pdf-edit-layer.is-add { pointer-events: auto; cursor: crosshair; }
+.pdf-edit-target {
+  position: absolute;
+  min-width: 4px;
+  min-height: 4px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  pointer-events: auto;
+  cursor: text;
+}
+.pdf-edit-target:hover, .pdf-edit-target:focus-visible {
+  border-color: #6d9cff;
+  background: rgb(80 132 255 / 10%);
+  outline: none;
+}
+.pdf-edit-hint, .pdf-edit-note {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 8px;
+  color: #f7f8fb;
+  background: rgb(28 31 38 / 90%);
+  box-shadow: 0 4px 18px rgb(0 0 0 / 18%);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.pdf-edit-note { top: auto; bottom: 10px; color: #f6df9a; }
+.pdf-edit-card {
+  position: absolute;
+  z-index: 2;
+  min-width: min(190px, calc(100% - 16px));
+  max-width: calc(100% - 16px);
+  min-height: 100px;
+  width: min(320px, calc(100% - 16px));
+  height: max(120px, min(230px, 32vh));
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px;
+  box-sizing: border-box;
+  border: 1px solid rgb(115 154 255 / 80%);
+  border-radius: 10px;
+  color: var(--ink, #202124);
+  background: var(--sheet, #fff);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
+  resize: both;
+  overflow: auto;
+  pointer-events: auto;
+  cursor: default;
+}
+.pdf-edit-card textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 38px;
+  resize: both;
+  box-sizing: border-box;
+  padding: 7px 8px;
+  border: 1px solid var(--rule-2, #d6d9df);
+  border-radius: 6px;
+  color: inherit;
+  background: var(--sheet, #fff);
+  font: inherit;
+  line-height: 1.45;
+}
+.pdf-edit-card.is-replace { resize: none; }
+.pdf-edit-controls, .pdf-edit-card footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.pdf-edit-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-2, #666b75);
+  font-size: 11px;
+}
+.pdf-edit-controls input[type="number"] {
+  width: 42px;
+  padding: 3px;
+  border: 1px solid var(--rule-2, #d6d9df);
+  border-radius: 5px;
+  color: inherit;
+  background: var(--sheet, #fff);
+}
+.pdf-edit-controls input[type="color"] {
+  width: 24px;
+  height: 22px;
+  padding: 1px;
+  border: 1px solid var(--rule-2, #d6d9df);
+  border-radius: 5px;
+  background: var(--sheet, #fff);
+}
+.pdf-edit-controls select {
+  margin-left: auto;
+  padding: 4px 5px;
+  border: 1px solid var(--rule-2, #d6d9df);
+  border-radius: 5px;
+  color: inherit;
+  background: var(--sheet, #fff);
+  font: inherit;
+  font-size: 11px;
+}
+.pdf-edit-card footer { justify-content: flex-end; }
+.pdf-edit-card footer span {
+  margin-right: auto;
+  color: var(--ink-3, #757b85);
+  font-size: 10px;
+}
+.pdf-edit-error {
+  padding: 4px 6px;
+  border-radius: 5px;
+  color: #b42318;
+  background: rgb(180 35 24 / 10%);
+  font-size: 10px;
+}
+.pdf-edit-card button {
+  padding: 5px 8px;
+  border: 1px solid var(--rule-2, #d6d9df);
+  border-radius: 6px;
+  color: var(--ink, #353942);
+  background: var(--sheet, #fff);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.pdf-edit-card button.primary {
+  border-color: var(--accent, #527fe5);
+  color: var(--accent-ink, #fff);
+  background: var(--accent, #527fe5);
+}
+.pdf-edit-card button:disabled { opacity: .55; cursor: default; }
