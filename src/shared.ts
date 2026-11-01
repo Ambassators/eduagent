@@ -5,13 +5,9 @@ import type { GeminiModelOption } from './gemini.js';
 export interface Settings {
   voiceProvider: 'codex' | 'gemini';
   geminiModel: string;
-  /** Live models tried in order when geminiModel is rate-limited or unavailable on every key. */
-  geminiLiveFallbacks: string[];
   geminiVoice: string;
   answerProvider: 'codex' | 'gemini';
   geminiAnswerModel: string;
-  /** Answer models tried in order when geminiAnswerModel is rate-limited or unavailable on every key. */
-  geminiAnswerFallbacks: string[];
   voice: string;
   model: string;
   prompt: string;
@@ -47,8 +43,8 @@ export interface Settings {
   standbyFalseWakeSeconds: number;
 }
 export const defaultSettings: Settings = {
-  voiceProvider: 'codex', geminiModel: 'gemini-3.8-live', geminiLiveFallbacks: [], geminiVoice: 'Kore',
-  answerProvider: 'codex', geminiAnswerModel: 'gemini-3.8-flash', geminiAnswerFallbacks: [],
+  voiceProvider: 'codex', geminiModel: 'gemini-3.8-live', geminiVoice: 'Kore',
+  answerProvider: 'codex', geminiAnswerModel: 'gemini-3.8-flash',
   voice: '', model: 'gpt-6.1-sol', codexPath: '', inputDevice: '', reasoningEffort: 'medium',
   quizModel: 'gpt-6.1-sol', quizReasoningEffort: 'medium',
   transparency: 'acrylic', theme: 'system', lowPowerMode: true, demoPlacement: 'side', autoCompact: true, compactAtTokens: 200000,
@@ -67,8 +63,6 @@ export const defaultSettings: Settings = {
 export interface ModelOption { model: string; displayName: string; isDefault: boolean; efforts?: string[] }
 export interface Status {
   geminiKeyConfigured?: boolean;
-  /** Masked per-key health from the key pool: ok, cooldown (rate-limited) or open (rejected/failing) until a time. */
-  geminiKeys?: { label: string; state: 'ok' | 'cooldown' | 'open'; until?: number; models?: string[] }[];
   geminiModels?: { live: GeminiModelOption[]; answer: GeminiModelOption[] };
   connected: boolean;
   account: { type: string; email?: string; name?: string; planType?: string } | null;
@@ -155,8 +149,7 @@ export interface DesktopAPI {
   /** resume: reconnecting after standby on the same bridge thread, so its context is still there. */
   startVoice(sdp: string, resume?: boolean): Promise<{threadId: string; sdp: string}>;
   stopVoice(): Promise<void>;
-  /** One or more keys separated by commas, spaces or new lines; append adds them to the saved keys. */
-  saveGeminiKey(key: string, append?: boolean): Promise<boolean>;
+  saveGeminiKey(key: string): Promise<boolean>;
   startGeminiVoice(resume?: boolean): Promise<{ sessionId: string }>;
   geminiActivity(sessionId: string, active: boolean): Promise<void>;
   /** Experimental: base64 16-bit mono PCM sent straight to the live session's input. */

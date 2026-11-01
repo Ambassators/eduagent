@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
-import { classifyError, GeminiError, type GeminiErrorKind } from './key-pool.ts';
 
 export interface GeminiEvent { type: string; [key: string]: unknown }
 interface Options {
@@ -36,12 +35,8 @@ export class GeminiLive {
     url.searchParams.set('key', this.options.apiKey);
     const socket = this.socket = this.connect(url);
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => fail('Gemini Live connection timed out. Check your network and API key.', 'timeout'), 30_000);
-      // Start errors carry a kind so the key pool can tell a rejected or rate-limited key from a bad model.
-      const fail = (message: string, kind?: GeminiErrorKind) => {
-        clearTimeout(timer); const text = this.redact(message);
-        reject(kind ? new GeminiError(text, kind) : classifyError(new Error(text))); this.close();
-      };
+      const timer = setTimeout(() => fail('Gemini Live connection timed out. Check your network and API key.'), 30_000);
+      const fail = (message: string) => { clearTimeout(timer); reject(new Error(this.redact(message))); this.close(); };
       this.rejectStart = error => { clearTimeout(timer); reject(error); };
       socket.on('open', () => {
         if (this.closed) return;
@@ -70,12 +65,12 @@ export class GeminiLive {
             resolve();
           }
           this.receive(message);
-        } catch { fail('Gemini Live sent an invalid response.', 'unavailable'); }
+        } catch { fail('Gemini Live sent an invalid response.'); }
       });
       socket.on('error', () => {
         if (this.closed) return;
         const message = 'Gemini Live could not connect. Check your network, API key, and model access.';
-        if (!this.ready) fail(message, 'unavailable'); else { this.options.event({ type: 'error', message }); this.close(); }
+        if (!this.ready) fail(message); else { this.options.event({ type: 'error', message }); this.close(); }
       });
       socket.on('close', (code, reason) => {
         clearTimeout(timer);
@@ -136,7 +131,7 @@ export class GeminiLive {
   close() {
     if (this.closed) return;
     this.closed = true; this.ready = false;
-    this.rejectStart?.(new GeminiError('Voice connection was cancelled.', 'aborted')); this.rejectStart = undefined;
+    this.rejectStart?.(new Error('Voice connection was cancelled.')); this.rejectStart = undefined;
     const socket = this.socket; this.socket = null;
     if (socket?.readyState === WebSocket.CONNECTING) socket.terminate(); else socket?.close();
   }

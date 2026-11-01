@@ -5,25 +5,15 @@ function text(value: unknown, limit: number): string {
   return value;
 }
 
-/** Up to five distinct, valid model IDs, excluding the primary model. */
-function models(value: unknown, primary: string): string[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > 20) throw new Error('Invalid input.');
-  const ids = value.map(item => text(item, 150).trim().replace(/^models\//, '')).filter(id => id && id !== primary && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,149}$/.test(id));
-  return [...new Set(ids)].slice(0, 5);
-}
-
 export function cleanSettings(value: unknown): Settings {
   if (!value || typeof value !== 'object') throw new Error('Invalid settings.');
   const data = value as Record<string, unknown>;
   // Earlier OS voice identifiers are intentionally discarded during migration.
   const voice = text(data.voice ?? '', 50);
-  const geminiAnswerModel = text(data.geminiAnswerModel ?? defaultSettings.geminiAnswerModel, 150).trim() || defaultSettings.geminiAnswerModel;
-  const geminiModel = text(data.geminiModel ?? defaultSettings.geminiModel, 150).trim() || defaultSettings.geminiModel;
   return { ...defaultSettings, voiceProvider: data.voiceProvider === 'gemini' ? 'gemini' : 'codex',
     answerProvider: data.answerProvider === 'gemini' ? 'gemini' : 'codex',
-    geminiAnswerModel, geminiAnswerFallbacks: models(data.geminiAnswerFallbacks, geminiAnswerModel),
-    geminiModel, geminiLiveFallbacks: models(data.geminiLiveFallbacks, geminiModel),
+    geminiAnswerModel: text(data.geminiAnswerModel ?? defaultSettings.geminiAnswerModel, 150).trim() || defaultSettings.geminiAnswerModel,
+    geminiModel: text(data.geminiModel ?? defaultSettings.geminiModel, 150).trim() || defaultSettings.geminiModel,
     geminiVoice: text(data.geminiVoice ?? defaultSettings.geminiVoice, 50).trim() || defaultSettings.geminiVoice,
     voice: /^[a-z]*$/.test(voice) ? voice : '', model: text(data.model ?? defaultSettings.model, 150),
     prompt: text(data.prompt ?? defaultSettings.prompt, 8000), codexPath: text(data.codexPath ?? '', 2000),
