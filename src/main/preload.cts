@@ -35,7 +35,7 @@ const api: DesktopAPI = {
   saveSettings: (settings: Settings) => ipcRenderer.invoke('voice:settings', settings),
   microphoneAccess: () => ipcRenderer.invoke('voice:microphone'),
   startVoice: (sdp: string, resume?: boolean) => ipcRenderer.invoke('voice:start', sdp, resume === true),
-  saveGeminiKey: key => ipcRenderer.invoke('voice:saveGeminiKey', key),
+  saveGeminiKey: (key, append) => ipcRenderer.invoke('voice:saveGeminiKey', key, append === true),
   startGeminiVoice: resume => ipcRenderer.invoke('voice:startGemini', resume === true),
   geminiActivity: (id, active) => ipcRenderer.invoke('voice:geminiActivity', id, active),
   stopVoice: () => ipcRenderer.invoke('voice:stop'),

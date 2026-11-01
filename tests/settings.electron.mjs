@@ -8,9 +8,9 @@ async function main() {
 await app.whenReady();
 let settings={...defaultSettings}, active=0, peak=0, fail=false;
 const history=[];
-let geminiKeyConfigured=false,keyFail=false;
+let geminiKeyConfigured=false,keyFail=false,keyAppends=[];
 const handlers={windowActivity:()=>true,status:()=>({connected:true,account:null,models:[{model:'quiz-model',displayName:'Quiz model',isDefault:false}],voices:[],voiceAvailable:false,settings,geminiKeyConfigured,platform:process.platform,darkMode:false}),workspace:()=>({files:[],folders:[],activeId:null,artifacts:[],thinking:{tokens:0},annotations:{overlays:[],highlights:[],pointer:null},quiz:{}}),browserState:()=>null,stop:()=>{},interrupt:()=>{},saveChat:()=>{},syncTranscript:()=>{},settings:async next=>{peak=Math.max(peak,++active);await new Promise(r=>setTimeout(r,80));active--;if(fail){fail=false;throw Error('Test save failure');}settings={...next};history.push(settings);return settings;}};
-handlers.saveGeminiKey=async key=>{if(keyFail){keyFail=false;throw Error('Key save failed');}geminiKeyConfigured=!!key;return geminiKeyConfigured;};
+handlers.saveGeminiKey=async (key,append)=>{if(keyFail){keyFail=false;throw Error('Key save failed');}keyAppends.push(append);geminiKeyConfigured=append?geminiKeyConfigured||!!key:!!key;return geminiKeyConfigured;};
 for(const [name,fn] of Object.entries(handlers))ipcMain.handle(`voice:${name}`,(_,...args)=>fn(...args));
 ipcMain.handle('voice:updateState',()=>({status:'disabled',currentVersion:'0.0.4',message:'Test build'}));
 const win=new BrowserWindow({width:1100,height:900,show:false,webPreferences:{preload:path.resolve('dist/main/main/preload.cjs'),contextIsolation:true,sandbox:true,offscreen:true}});
@@ -119,8 +119,11 @@ try{
  await js(setKey);keyFail=true;await js(saveKey);
  await wait(`!![...document.querySelectorAll('.dialog-error')].find(e=>e.textContent.includes('Key save failed'))`);
  assert.equal(geminiKeyConfigured,false);
- await js(saveKey);await wait(`document.querySelector('[name="geminiApiKey"]').placeholder.includes('Key configured')`);
+ await js(saveKey);await wait(`document.querySelector('[name="geminiApiKey"]').placeholder.includes('Keys configured')`);
  assert.equal(geminiKeyConfigured,true);
+ await js(setKey);await js(`[...document.querySelectorAll('.settings-section button')].find(b=>b.textContent==='Add keys').click()`);
+ await wait(`document.querySelector('[name="geminiApiKey"]').value===''`);
+ assert.deepEqual(keyAppends,[false,true]);assert.equal(geminiKeyConfigured,true);
  assert.equal(await js(`document.querySelector('[name="geminiApiKey"]').value`),'');
  assert.equal('geminiApiKey' in settings,false);
  await js(`(()=>{const input=document.querySelector('[name="geminiVoice"]');input.value='Puck';input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
@@ -133,7 +136,7 @@ try{
  await js(`document.querySelector('[name="geminiApiKey"]').scrollIntoView({block:'center'})`);
  win.webContents.invalidate();await new Promise(r=>setTimeout(r,200));
  await writeFile('/tmp/eduagent-gemini-settings.png',(await win.webContents.capturePage()).toPNG());
- await js(`[...document.querySelectorAll('.settings-section button')].find(b=>b.textContent==='Remove saved key').click()`);
+ await js(`[...document.querySelectorAll('.settings-section button')].find(b=>b.textContent==='Remove saved keys').click()`);
  await wait(`document.querySelector('[name="geminiApiKey"]').placeholder.includes('Paste')`);assert.equal(geminiKeyConfigured,false);
  await js(`(()=>{const input=document.querySelector('[name="voiceProvider"]');input.value='codex';input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
  await wait(`!document.querySelector('[name="geminiModel"]') && document.querySelector('.dialog-footer [role="status"]').textContent==='Changes save automatically'`);

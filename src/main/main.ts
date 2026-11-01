@@ -31,6 +31,7 @@ import { AppUpdates } from './updates.js';
 import { GeminiLive } from './gemini-live.js';
 import { geminiCatalog } from '../gemini.js';
 import { listGeminiModels, runGeminiAnswer } from './gemini-answer.js';
+import { classifyError, GeminiError, KeyPool, parseKeys } from './key-pool.ts';
 
 protocol.registerSchemesAsPrivileged([{scheme:'codex-presentation',privileges:{standard:true,secure:true}}, {scheme:'codex-glasstex',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 
@@ -42,16 +43,22 @@ let settings: Settings = { ...defaultSettings };
 let voiceName = '';
 let gemini: GeminiLive | null = null;
 let geminiCatalogCache: { key: string; expires: number; result: ReturnType<typeof geminiCatalog> } | null = null;
-async function discoverGeminiModels(key: string) {
-  if (!key) return geminiCatalog([]);
-  if (geminiCatalogCache?.key===key && geminiCatalogCache.expires>Date.now()) return geminiCatalogCache.result;
-  const result = await listGeminiModels(key).then(geminiCatalog).catch(()=>geminiCatalog([]));
-  geminiCatalogCache={key,expires:Date.now()+300_000,result}; return result;
+async function discoverGeminiModels(keys: KeyPool) {
+  if (!keys.size) return geminiCatalog([]);
+  const id = keys.all.join('\n');
+  if (geminiCatalogCache?.key===id && geminiCatalogCache.expires>Date.now()) return geminiCatalogCache.result;
+  const result = await keys.run(key => listGeminiModels(key)).then(geminiCatalog).catch(()=>geminiCatalog([]));
+  geminiCatalogCache={key:id,expires:Date.now()+300_000,result}; return result;
 }
-async function geminiKey(): Promise<string> {
-  try { return safeStorage.decryptString(await readFile(path.join(app.getPath('userData'), 'gemini-key.bin'))); }
-  catch { return process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || ''; }
+/** Shared by Gemini Live and Gemini answers so a rate-limited key is skipped by both. */
+const geminiPool = new KeyPool();
+const geminiKeyFile = () => path.join(app.getPath('userData'), 'gemini-key.bin');
+/** Saved keys (one per line; a single legacy key reads the same), else GEMINI_API_KEYS / GEMINI_API_KEY / GOOGLE_API_KEY. */
+async function storedGeminiKeys(): Promise<string[]> {
+  try { return parseKeys(safeStorage.decryptString(await readFile(geminiKeyFile()))); }
+  catch { return parseKeys([process.env.GEMINI_API_KEYS, process.env.GEMINI_API_KEY, process.env.GOOGLE_API_KEY].filter(Boolean).join(',')); }
 }
+async function geminiKeys(): Promise<KeyPool> { geminiPool.setKeys(await storedGeminiKeys()); return geminiPool; }
 let threadId: string | null = null;
 let turnId: string | null = null;
 let startingTurn = false;
@@ -202,11 +209,11 @@ async function status(): Promise<Status> {
     voices = (response.voices.v1 ?? []).map((id: string) => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1) }));
   } catch { if (settings.voiceProvider === 'codex') warning = 'This Codex build does not expose subscription voice. Select a supported native Codex executable.'; }
   const a = account.account;
-  const key = await geminiKey(), keyConfigured = !!key;
-  const geminiModels = await discoverGeminiModels(key);
+  const keys = await geminiKeys(), keyConfigured = keys.size > 0;
+  const geminiModels = await discoverGeminiModels(keys);
   if(a?.type === 'chatgpt') thinker.contextChanged();
   return { connected: true, account: a ? { type: a.type, email: a.email, name: a.type === 'chatgpt' ? await accountName() : undefined, planType: a.planType } : null,
-    models, voices, geminiModels, geminiKeyConfigured: keyConfigured, voiceAvailable: settings.voiceProvider === 'gemini' ? keyConfigured && a?.type === 'chatgpt' : voices.length > 0 && a?.type === 'chatgpt', settings,
+    models, voices, geminiModels, geminiKeyConfigured: keyConfigured, geminiKeys: keys.snapshot(), voiceAvailable: settings.voiceProvider === 'gemini' ? keyConfigured && a?.type === 'chatgpt' : voices.length > 0 && a?.type === 'chatgpt', settings,
     executable: codex.executable, platform: process.platform, darkMode: nativeTheme.shouldUseDarkColors, warning };
 }
 async function ensureThread(): Promise<string> {
@@ -312,30 +319,37 @@ async function startGeminiVoice(): Promise<{ sessionId: string }> {
   const generation = ++voiceGeneration; voiceStarting = true;
   let session: GeminiLive | undefined;
   try {
-    const key = await geminiKey();
-    if (!key) throw new Error('Add your Gemini API key in Preferences → Gemini API.');
+    const keys = await geminiKeys();
+    if (!keys.size) throw new Error('Add your Gemini API key in Preferences → Gemini API.');
     await ensureThread(); await thinker.prepareVoiceContext();
     if (generation !== voiceGeneration) throw new Error('Voice connection was cancelled.');
-    session = new GeminiLive({ apiKey: key, model: settings.geminiModel, voice: settings.geminiVoice,
-      prompt: settings.prompt + '\n' + interactiveQuizVoiceInstructions + '\nYou are the Gemini Live voice in this workspace. Call delegate for any workspace action, file lookup, research, deep reasoning, or screen change. It queues Think; results arrive separately. Stay silent during quiet context updates, silence, or noise. Never invent user speech. When referring to this or here, pass that reference to delegate, which has the current pointer context.' + (settings.proactiveExplain ? '\nWhen answering questions about the open PDF, delegate a request to highlight the relevant passage and show a useful explanation on the page.' : '') + (settings.voiceAckFiller ? '' : '\nSkip spoken acknowledgements before delegation.'),
-      context: JSON.stringify({ history: thinker.voiceHistory(), document: documents.liveContext().slice(0, 22000), presentations: thinker.voicePresentationContext(), quiz: quizContext(quizzes.state) }),
-      event: event => {
-        if (gemini !== session || generation !== voiceGeneration) return;
-        if (event.type === 'error') voiceActive = false;
-        emit({ method: 'gemini/event', params: { sessionId: session!.id, event } });
-      },
-      delegate: async message => {
-        if (gemini !== session || generation !== voiceGeneration) throw new Error('Voice connection was cancelled.');
-        await thinker.flushVoiceContext();
-        if (gemini !== session || generation !== voiceGeneration) throw new Error('Voice connection was cancelled.');
-        return { queued: true, jobId: await thinker.requestThink(message, 'bridge') };
-      }
-    });
-    gemini = session;
-    await session.start();
-    if (generation !== voiceGeneration) throw new Error('Voice connection was cancelled.');
+    // Try key × model pairs in pool order; a rejected or rate-limited pair falls through before voice starts.
+    let liveModel = settings.geminiModel;
+    await keys.run(async (key, model) => {
+      if (generation !== voiceGeneration) throw new GeminiError('Voice connection was cancelled.', 'aborted');
+      const attempt: GeminiLive = session = new GeminiLive({ apiKey: key, model, voice: settings.geminiVoice,
+        prompt: settings.prompt + '\n' + interactiveQuizVoiceInstructions + '\nYou are the Gemini Live voice in this workspace. Call delegate for any workspace action, file lookup, research, deep reasoning, or screen change. It queues Think; results arrive separately. Stay silent during quiet context updates, silence, or noise. Never invent user speech. When referring to this or here, pass that reference to delegate, which has the current pointer context.' + (settings.proactiveExplain ? '\nWhen answering questions about the open PDF, delegate a request to highlight the relevant passage and show a useful explanation on the page.' : '') + (settings.voiceAckFiller ? '' : '\nSkip spoken acknowledgements before delegation.'),
+        context: JSON.stringify({ history: thinker.voiceHistory(), document: documents.liveContext().slice(0, 22000), presentations: thinker.voicePresentationContext(), quiz: quizContext(quizzes.state) }),
+        event: event => {
+          if (gemini !== attempt || generation !== voiceGeneration) return;
+          // A quota or key error mid-session marks this key so the next reconnect picks another.
+          if (event.type === 'error') { voiceActive = false; const err = classifyError(new Error(String(event.message ?? ''))); if (err.rotates) keys.recordFailure(key, err, model); }
+          emit({ method: 'gemini/event', params: { sessionId: attempt.id, event } });
+        },
+        delegate: async message => {
+          if (gemini !== attempt || generation !== voiceGeneration) throw new Error('Voice connection was cancelled.');
+          await thinker.flushVoiceContext();
+          if (gemini !== attempt || generation !== voiceGeneration) throw new Error('Voice connection was cancelled.');
+          return { queued: true, jobId: await thinker.requestThink(message, 'bridge') };
+        }
+      });
+      gemini = attempt;
+      try { await attempt.start(); liveModel = model; }
+      catch (error) { attempt.close(); if (gemini === attempt) gemini = null; throw error; }
+    }, { models: [settings.geminiModel, ...settings.geminiLiveFallbacks] });
+    if (generation !== voiceGeneration || !session) throw new Error('Voice connection was cancelled.');
     voiceActive = true; voiceStarting = false;
-    debugLog({ agent: 'voice', kind: 'route', label: 'Gemini Live connected', model: settings.geminiModel, detail: settings.geminiVoice });
+    debugLog({ agent: 'voice', kind: 'route', label: liveModel === settings.geminiModel ? 'Gemini Live connected' : `Gemini Live connected on fallback (${settings.geminiModel} unavailable)`, model: liveModel, detail: settings.geminiVoice });
     return { sessionId: session.id };
   } catch (error) {
     session?.close();
@@ -453,18 +467,19 @@ function registerIPC(): void {
     const allowed = process.platform !== 'darwin' || await systemPreferences.askForMediaAccess('microphone');
     microphoneAllowed = allowed; return allowed;
   });
-  handle('saveGeminiKey', async (raw: unknown) => {
+  handle('saveGeminiKey', async (raw: unknown, append: unknown) => {
     if (voiceActive || voiceStarting) throw new Error('End voice before changing the API key.');
     if (thinker.state.busy || thinker.state.queued) throw new Error('Wait for Think to finish before changing the API key.');
-    const key = text(raw, 500).trim();
+    const entered = parseKeys(text(raw, 10_000));
+    const keys = append === true ? parseKeys([...await storedGeminiKeys(), ...entered].join('\n')) : entered;
     geminiCatalogCache=null;
-    const target = path.join(app.getPath('userData'), 'gemini-key.bin');
-    if (!key) await rm(target, { force: true });
+    const target = geminiKeyFile();
+    if (!keys.length) await rm(target, { force: true });
     else {
       if (!safeStorage.isEncryptionAvailable() || process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text') throw new Error('Secure key storage is unavailable. Set GEMINI_API_KEY before launching the app.');
-      await writeFile(target, safeStorage.encryptString(key), { mode: 0o600 });
+      await writeFile(target, safeStorage.encryptString(keys.join('\n')), { mode: 0o600 });
     }
-    return !!await geminiKey();
+    return (await geminiKeys()).size > 0;
   });
   handle('startGemini', startGeminiVoice);
   handle('geminiActivity', (id: unknown, active: unknown) => {
@@ -713,7 +728,7 @@ async function initializeApp(): Promise<void> {
   thinker=new ThinkEngine(codex,documents,()=>settings,workspace,emit,relayToVoice,displayPresentation,async(name,args)=>isBrowserTool(name)?browser.execute(name,args):isQuizTool(name)?executeQuizTool(name,args):pdfOverlays.execute(name,args),()=>[
     ...pdfOverlays.state.overlays.filter(item=>item.fileId===documents.activeId).map(item=>({...item,title:`${item.title} (PDF page ${item.page})`})),
     ...(documents.activeId&&documents.content(documents.activeId).info.kind==='html'?[{id:documents.activeId,title:documents.content(documents.activeId).info.name,kind:'html',content:documents.content(documents.activeId).text}]:[])
-  ], value => { if (voiceActive && gemini) gemini.context(value.slice(0, 24000)); }, async request => runGeminiAnswer({...request,apiKey:await geminiKey()}));
+  ], value => { if (voiceActive && gemini) gemini.context(value.slice(0, 24000)); }, async request => runGeminiAnswer({...request,apiKey:await geminiKeys()}));
   codex.toolHandler=params=>quizzes.handlesThread(params.threadId)?quizzes.executeTool(params):thinker.executeTool(params);
   ensurePresentationProtocol(protocol,presentationResponse);
   protocol.handle('codex-glasstex',glassTeXResponse(path.resolve(here,'../../renderer/glasstex')));

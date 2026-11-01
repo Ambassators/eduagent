@@ -1,5 +1,5 @@
 import BrowserPanel from './BrowserPanel';
-import GeminiModelSelect from './GeminiModelSelect';
+import GeminiModelSelect, { GeminiFallbackModels } from './GeminiModelSelect';
 import { geminiLiveModels, geminiAnswerModels, geminiVoices } from '../gemini';
 import type { BrowserState } from '../browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -468,12 +468,12 @@ export default function App() {
     settingsDraft.current = next; setDraft(next);
     if (save) persistSettings(next);
   }
-  async function saveGeminiKey(value: string) {
+  async function saveGeminiKey(value: string, append = false) {
     setKeySaving(true); setKeyError('');
     try {
       await settingsQueue.current;
       await endSession();
-      await api().saveGeminiKey(value);
+      await api().saveGeminiKey(value, append);
       setGeminiKey(''); setStatus(await api().status());
     } catch (error) { setKeyError(errorMessage(error)); }
     finally { setKeySaving(false); }
@@ -707,6 +707,7 @@ export default function App() {
         <div className="settings-grid">
           <label className="field"><span>Provider</span><select name="answerProvider" value={draft.answerProvider} onChange={event=>updateSettings({answerProvider:event.target.value as Settings['answerProvider']})}><option value="codex">Codex (ChatGPT subscription)</option><option value="gemini">Gemini</option></select></label>
           {draft.answerProvider==='codex'?<><label className="field"><span>Model</span><select name="answerModel" value={draft.model} onChange={event=>updateSettings({model:event.target.value})}><option value="">Codex default</option>{draft.model&&!status?.models.some(model=>model.model===draft.model)&&<option value={draft.model}>{draft.model==='gpt-6.1-sol'?'GPT-6.1 Sol':draft.model}</option>}{status?.models.map(model=><option key={model.model} value={model.model}>{model.displayName}</option>)}</select></label></>:<GeminiModelSelect key={`answer:${settingsOpen}`} name="geminiAnswerModel" label="Model" value={draft.geminiAnswerModel} models={status?.geminiModels?.answer??geminiAnswerModels} onChange={(value,save)=>updateSettings({geminiAnswerModel:value},save)} onCommit={()=>persistSettings(settingsDraft.current)}/>}
+          {draft.answerProvider==='gemini'&&<GeminiFallbackModels name="geminiAnswerFallbacks" value={draft.geminiAnswerFallbacks} models={status?.geminiModels?.answer??geminiAnswerModels} onCommit={value=>updateSettings({geminiAnswerFallbacks:value})}/>}
           <label className="field"><span>Thinking effort</span><select name="answerEffort" value={draft.reasoningEffort} onChange={event=>updateSettings({reasoningEffort:event.target.value as Settings['reasoningEffort']})}>{['low','medium','high','xhigh'].map(effort=><option key={effort} value={effort}>{effort==='xhigh'?(draft.answerProvider==='gemini'?'High (Gemini maximum)':'Extra high'):effort.charAt(0).toUpperCase()+effort.slice(1)}</option>)}</select></label>
         </div>
         <h4>Quiz generator</h4>
@@ -733,6 +734,7 @@ export default function App() {
             <GeminiModelSelect key={`live:${settingsOpen}`} name="geminiModel" label="Gemini model" value={draft.geminiModel} models={status?.geminiModels?.live??geminiLiveModels} onChange={(value,save)=>updateSettings({geminiModel:value},save)} onCommit={()=>persistSettings(settingsDraft.current)}/>
             <label className="field"><span>Gemini voice</span><select name="geminiVoice" value={draft.geminiVoice} onChange={event=>updateSettings({geminiVoice:event.target.value})}>{geminiVoices.map(name=><option key={name} value={name}>{name}</option>)}</select></label>
           </div>
+          <GeminiFallbackModels name="geminiLiveFallbacks" value={draft.geminiLiveFallbacks} models={status?.geminiModels?.live??geminiLiveModels} onCommit={value=>updateSettings({geminiLiveFallbacks:value})}/>
 
         </>}
         <label className="check-setting voice-tools-setting"><input type="checkbox" name="voiceAutoMute" checked={draft.voiceAutoMute} onChange={event=>updateSettings({voiceAutoMute:event.target.checked})}/><span>Mute when I say “mute”<small>Automatically mute the microphone when you say “mute”. Use the microphone button to unmute.</small></span></label>
@@ -751,10 +753,11 @@ export default function App() {
         <label className="field wide"><span>Voice instructions</span><textarea rows={4} maxLength={8000} value={draft.prompt} onChange={event=>updateSettings({prompt:event.target.value},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
       </section>
       {(draft.voiceProvider==='gemini'||draft.answerProvider==='gemini')&&<section className="settings-section"><h3>Gemini API</h3>
-          <label className="field wide"><span>Gemini API key</span><input type="password" name="geminiApiKey" autoComplete="off" maxLength={500} value={geminiKey} placeholder={status?.geminiKeyConfigured?'Key configured · enter a replacement':'Paste your Google AI Studio API key'} onChange={event=>{setGeminiKey(event.target.value);setKeyError('');}}/></label>
-          <div className="settings-grid"><button className="button-secondary" disabled={keySaving||!geminiKey.trim()} onClick={()=>void saveGeminiKey(geminiKey)}>{keySaving?'Saving…':'Save key'}</button>{status?.geminiKeyConfigured&&<button className="button-secondary" disabled={keySaving} onClick={()=>void saveGeminiKey('')}>Remove saved key</button>}</div>
+          <label className="field wide"><span>Gemini API keys</span><input type="password" name="geminiApiKey" autoComplete="off" maxLength={10000} value={geminiKey} placeholder={status?.geminiKeyConfigured?'Keys configured · enter replacements or more keys':'Paste your Google AI Studio API key'} onChange={event=>{setGeminiKey(event.target.value);setKeyError('');}}/></label>
+          <div className="settings-grid"><button className="button-secondary" disabled={keySaving||!geminiKey.trim()} onClick={()=>void saveGeminiKey(geminiKey)}>{keySaving?'Saving…':status?.geminiKeyConfigured?'Replace keys':'Save key'}</button>{status?.geminiKeyConfigured&&<button className="button-secondary" disabled={keySaving||!geminiKey.trim()} onClick={()=>void saveGeminiKey(geminiKey,true)}>Add keys</button>}{status?.geminiKeyConfigured&&<button className="button-secondary" disabled={keySaving} onClick={()=>void saveGeminiKey('')}>Remove saved keys</button>}</div>
           {keyError&&<p className="dialog-error" role="alert">{keyError}</p>}
-          <p className="settings-intro">{status?.geminiKeyConfigured?'API key configured. ':'Add a key to enable Gemini Live. '}Keys are encrypted on this device. Gemini uses your Google API quota; Gemini answers and voice share this key. Quiz generation and the Codex bridge use your ChatGPT sign-in.</p>
+          {(status?.geminiKeys?.length??0)>1&&<p className="settings-intro">{status!.geminiKeys!.map(key=>`${key.label}: ${key.state==='ok'?'ready':key.state==='cooldown'?'rate-limited':'paused'}${key.models?.length?` on ${key.models.join(', ')}`:''}${key.until?` for ${Math.max(1,Math.ceil((key.until-Date.now())/1000))}s`:''}`).join(' · ')}</p>}
+          <p className="settings-intro">{status?.geminiKeyConfigured?`${(status.geminiKeys?.length??1)>1?`${status.geminiKeys!.length} API keys`:'API key'} configured. `:'Add a key to enable Gemini Live. '}Separate several keys with commas; requests rotate across them and skip a key that is rate-limited or rejected. Keys are encrypted on this device. Gemini uses your Google API quota; Gemini answers and voice share these keys. Quiz generation and the Codex bridge use your ChatGPT sign-in.</p>
       </section>}
       <details className="settings-section advanced"><summary>Advanced</summary>
         <label className="field wide"><span>Codex executable</span><input value={draft.codexPath} placeholder="Use bundled Codex" onChange={event=>updateSettings({codexPath:event.target.value},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
