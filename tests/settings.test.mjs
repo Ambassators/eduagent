@@ -31,3 +31,41 @@ test('sidebar file preference survives saving and old display preferences remain
   }
   assert.equal(cleanSettings({demoPlacement:'invalid'}).demoPlacement,defaultSettings.demoPlacement);
 });
+
+
+test('spoken auto-mute defaults off, accepts only explicit opt-in, and survives saving', () => {
+  assert.equal(defaultSettings.voiceAutoMute, false);
+  for (const value of [undefined, false, 'true', 1, null]) {
+    assert.equal(cleanSettings({voiceAutoMute:value}).voiceAutoMute, false);
+  }
+  const saved=cleanSettings({voiceAutoMute:true});
+  assert.equal(cleanSettings(JSON.parse(JSON.stringify(saved))).voiceAutoMute, true);
+});
+
+
+test('voice provider settings migrate and retain independent voices without storing API keys', () => {
+  const old = {...defaultSettings, voice:'maple'};
+  delete old.voiceProvider; delete old.geminiModel; delete old.geminiVoice;
+  const migrated=cleanSettings(old);
+  assert.equal(migrated.voiceProvider,'codex');
+  assert.equal(migrated.voice,'maple');
+  const gemini=cleanSettings({...migrated,voiceProvider:'gemini',geminiVoice:'Puck',geminiModel:'gemini-custom-live',geminiApiKey:'secret'});
+  assert.equal(gemini.voiceProvider,'gemini');assert.equal(gemini.geminiVoice,'Puck');assert.equal(gemini.voice,'maple');
+  assert.equal('geminiApiKey' in gemini,false);
+  assert.deepEqual(cleanSettings(JSON.parse(JSON.stringify(gemini))),gemini);
+  assert.equal(cleanSettings({voiceProvider:'unknown'}).voiceProvider,'codex');
+  assert.equal(cleanSettings({geminiModel:'  '}).geminiModel,defaultSettings.geminiModel);
+  assert.throws(()=>cleanSettings({geminiVoice:42}),/Invalid input/);
+});
+
+
+test('Gemini answer provider saves independently from voice, Codex answers, and quizzes',()=>{
+ const old={...defaultSettings};delete old.answerProvider;delete old.geminiAnswerModel;
+ const migrated=cleanSettings(old);assert.equal(migrated.answerProvider,'codex');
+ const saved=cleanSettings({...migrated,answerProvider:'gemini',geminiAnswerModel:'gemini-private-answer'});
+ assert.equal(saved.voiceProvider,'codex');assert.equal(saved.model,defaultSettings.model);assert.equal(saved.quizModel,defaultSettings.quizModel);
+ assert.deepEqual(cleanSettings(JSON.parse(JSON.stringify(saved))),saved);
+ assert.equal(cleanSettings({answerProvider:'unknown'}).answerProvider,'codex');
+ assert.equal(cleanSettings({geminiAnswerModel:'  '}).geminiAnswerModel,defaultSettings.geminiAnswerModel);
+ assert.throws(()=>cleanSettings({geminiAnswerModel:42}),/Invalid input/);
+});

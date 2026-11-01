@@ -1,4 +1,4 @@
-import type { DesktopAPI } from '../shared';
+import type { DesktopAPI, Settings } from '../shared';
 import { MicVAD } from '@ricky0123/vad-web';
 import { VoiceInput, VoiceInputControl } from './voice-input';
 import { SampleRing, encodePCM16 } from './voice-audio';
@@ -26,9 +26,19 @@ const FAST_RATE = 0.3;
 const RECORDER_BLOCK = 4096;
 export interface StandbyExperiments { catchUp: 'realtime' | 'fast' | 'burst'; wakeMs: number; falseWakeSeconds: number }
 
-/** The renderer owns audio; only SDP and session controls cross the IPC bridge. */
+/** The renderer owns microphone capture and playback for WebRTC and Gemini PCM audio. */
 export class VoiceSession {
   private peer: RTCPeerConnection | null = null;
+  private provider: Settings['voiceProvider'] = 'codex';
+  private geminiId: string | null = null;
+  private geminiUnsubscribe: (() => void) | undefined;
+  private geminiRecorder: ScriptProcessorNode | null = null;
+  private geminiInputSource: MediaStreamAudioSourceNode | null = null;
+  private geminiOutput: GainNode | null = null;
+  private geminiSources = new Set<AudioBufferSourceNode>();
+  private geminiNextTime = 0;
+  setProvider(provider: Settings['voiceProvider']) { this.provider = provider; }
+  private get transportConnected() { return !!(this.peer || this.geminiId); }
   private stream: MediaStream | null = null;
   private audio = new Audio();
   private context: AudioContext | null = null;
@@ -134,6 +144,7 @@ export class VoiceSession {
   private async connect(resume: boolean) {
     if (resume && !await this.desktop.microphoneAccess()) throw new Error('Microphone access was denied. Enable it in your system privacy settings.');
     this.check();
+    if (this.provider === 'gemini') { await this.connectGemini(resume); return; }
     const peer = this.peer = new RTCPeerConnection();
     const live = () => !this.closed && this.peer === peer;
     this.transmitted!.getAudioTracks().forEach(track => peer.addTrack(track, this.transmitted!));
@@ -200,7 +211,72 @@ export class VoiceSession {
     );
     this.inputControl.setPaused(true);
   }
+  private async connectGemini(resume: boolean) {
+    const answer = await this.desktop.startGeminiVoice(resume); this.check();
+    const id = this.geminiId = answer.sessionId;
+    const live = () => !this.closed && this.geminiId === id;
+    const context = this.context!;
+    this.geminiOutput = context.createGain(); this.geminiOutput.gain.value = this.outputMuted ? 0 : 1;
+    this.outputMeter = context.createAnalyser(); this.outputMeter.fftSize = 256;
+    this.geminiOutput.connect(this.outputMeter).connect(context.destination);
+    this.geminiUnsubscribe = this.desktop.onEvent(message => {
+      if (!live() || message.method !== 'gemini/event' || message.params.sessionId !== id) return;
+      const event = message.params.event as LiveEvent;
+      if (event.type === 'audio.interrupted') { this.clearGeminiAudio(); return; }
+      if (event.type === 'audio.delta') {
+        try { this.playGeminiAudio(String(event.data), Number(event.sampleRate)); }
+        catch { this.callbacks.error(new Error('Gemini audio playback failed. Start voice again to reconnect.')); }
+        return;
+      }
+      if (event.type.includes('transcript')) this.lastActivity = performance.now();
+      if (event.type === 'input_transcript.added') {
+        if (!this.input.accepts(event.item?.id, performance.now())) return;
+        this.heardSinceWake = true;
+      }
+      this.callbacks.event(event);
+    });
+    let activityUpdate: Promise<void> = Promise.resolve();
+    this.inputControl = new VoiceInputControl(type => {
+      const paused = type === 'input_audio.pause';
+      activityUpdate = this.desktop.geminiActivity(id, !paused).then(() => {
+        if (live()) this.inputControl?.acknowledge(paused);
+      }).catch(error => { if (live()) this.callbacks.error(error instanceof Error ? error : new Error(String(error))); });
+    }, () => { if (live()) this.callbacks.error(new Error('Gemini did not confirm the microphone state. Reconnect voice.')); });
+    this.inputControl.setPaused(true);
+    await activityUpdate; this.check();
+    // Capture the same delayed and gated stream used by WebRTC, with no microphone output to speakers.
+    const source = this.geminiInputSource = context.createMediaStreamSource(this.transmitted!);
+    const recorder = this.geminiRecorder = context.createScriptProcessor(1024, 1, 1);
+    recorder.onaudioprocess = event => {
+      if (!live() || this.inputMuted || !this.inputGain?.gain.value) return;
+      const data = encodePCM16(event.inputBuffer.getChannelData(0), context.sampleRate, 16000);
+      void this.desktop.appendVoiceAudio(data, 16000).catch(error => { if (live()) this.callbacks.error(error instanceof Error ? error : new Error(String(error))); });
+    };
+    source.connect(recorder).connect(context.destination);
+  }
+  private clearGeminiAudio() {
+    for (const source of this.geminiSources) { source.stop(); source.disconnect(); }
+    this.geminiSources.clear(); this.geminiNextTime = 0;
+  }
+  private playGeminiAudio(data: string, sampleRate: number) {
+    if (!this.context || !this.geminiOutput || !Number.isInteger(sampleRate) || sampleRate < 8000 || sampleRate > 48000) return;
+    const binary = atob(data);
+    if (!binary.length || binary.length % 2) return;
+    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+    const view = new DataView(bytes.buffer), buffer = this.context.createBuffer(1, bytes.length / 2, sampleRate), samples = buffer.getChannelData(0);
+    for (let i = 0; i < samples.length; i++) samples[i] = view.getInt16(i * 2, true) / 32768;
+    const source = this.context.createBufferSource(); source.buffer = buffer; source.connect(this.geminiOutput);
+    const start = Math.max(this.context.currentTime + 0.02, this.geminiNextTime);
+    this.geminiNextTime = start + buffer.duration; this.geminiSources.add(source);
+    source.onended = () => { this.geminiSources.delete(source); source.disconnect(); };
+    source.start(start);
+  }
   private disconnectPeer() {
+    this.geminiId = null; this.geminiUnsubscribe?.(); this.geminiUnsubscribe = undefined;
+    this.geminiInputSource?.disconnect(); this.geminiInputSource = null;
+    if (this.geminiRecorder) { this.geminiRecorder.onaudioprocess = null; this.geminiRecorder.disconnect(); this.geminiRecorder = null; }
+    this.clearGeminiAudio(); this.geminiOutput?.disconnect(); this.geminiOutput = null;
+    this.outputMeter?.disconnect();
     clearTimeout(this.disconnectTimer); this.cancelWait?.(); this.cancelWait = undefined;
     this.inputControl?.close(); this.inputControl = null;
     if (this.inputGain) this.inputGain.gain.value = 0;
@@ -209,7 +285,7 @@ export class VoiceSession {
   }
   /** Closes the live session while the microphone and VAD keep listening for speech. */
   private sleep() {
-    if (this.closed || this.asleep || this.waking || !this.peer) return;
+    if (this.closed || this.asleep || this.waking || !this.transportConnected) return;
     this.asleep = true; this.wokeAt = 0; this.wakeCandidate = false; clearTimeout(this.speechTail);
     this.disconnectPeer();
     this.callbacks.standby?.(true);
@@ -319,7 +395,7 @@ export class VoiceSession {
       }
       const heard = rms(this.outputMeter, output), now = performance.now();
       if (heard > 0.035 || this.input.speaking) this.lastActivity = now;
-      if (this.standbyMs && this.peer && !this.waking && now - this.lastActivity > this.standbyMs && this.canSleep()) { this.log('Standby', `after ${Math.round(this.standbyMs / 1000)}s quiet`); this.sleep(); }
+      if (this.standbyMs && this.transportConnected && !this.waking && now - this.lastActivity > this.standbyMs && this.canSleep()) { this.log('Standby', `after ${Math.round(this.standbyMs / 1000)}s quiet`); this.sleep(); }
       else if (this.experiments.falseWakeSeconds && this.wokeAt && !this.heardSinceWake && !this.input.speaking && now - this.wokeAt > this.experiments.falseWakeSeconds * 1000 && this.canSleep()) {
         this.log('False wake', `no words recognized in ${this.experiments.falseWakeSeconds}s; back to standby`); this.sleep();
       }
@@ -364,7 +440,7 @@ export class VoiceSession {
       if (!this.closed) { this.close(); this.callbacks.error(new Error(`Speech detection failed: ${error.message}`)); }
     });
   }
-  muteOutput(muted: boolean) { this.outputMuted = muted; this.audio.muted = muted; }
+  muteOutput(muted: boolean) { this.outputMuted = muted; this.audio.muted = muted; if (this.geminiOutput) this.geminiOutput.gain.value = muted ? 0 : 1; }
   close() {
     this.closed = true; clearTimeout(this.meterTimer);
     clearTimeout(this.speechTail); this.input.mute(true);

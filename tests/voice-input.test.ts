@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CaptionGroups, EchoFilter, VoiceInput, VoiceInputControl } from '../src/renderer/voice-input.ts';
+import { CaptionGroups, EchoFilter, VoiceInput, VoiceInputControl, shouldAutoMute } from '../src/renderer/voice-input.ts';
 
 test('silence and muted input never authorize transcripts, including repeats after unmute', () => {
   const input = new VoiceInput();
@@ -82,4 +82,15 @@ test('overlapping speech keeps one bubble per speaker; later turns start new bub
   const reply = groups.pick('assistant', 6500, id);
   assert.notEqual(reply, a);
   assert.equal(groups.pick('user', 13000, id) === u, false);
+});
+
+
+test('spoken auto-mute is opt-in and matches only the complete word', () => {
+  for (const caption of ['mute', 'Mute.', 'Please mute the microphone', 'okay—MUTE!']) {
+    assert.equal(shouldAutoMute(caption, false), false);
+    assert.equal(shouldAutoMute(caption, true), true);
+  }
+  for (const caption of ['', 'unmute', 'muted', 'commute', 'mutely', 'muteable']) {
+    assert.equal(shouldAutoMute(caption, true), false);
+  }
 });

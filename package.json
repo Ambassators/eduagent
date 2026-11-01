@@ -119,7 +119,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Codex Voice sends microphone audio to your subscription voice session only while you are connected."
+        "NSMicrophoneUsageDescription": "Codex Voice sends microphone audio to your selected voice service only while you are connected."
       },
       "target": [
         "dmg",

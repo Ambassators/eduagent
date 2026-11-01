@@ -102,3 +102,8 @@ export class CaptionGroups {
   }
   reset() { this.open = {}; this.latest = null; this.last = 0; }
 }
+
+/** Match the spoken word, never substrings such as "unmute" or "muted". */
+export function shouldAutoMute(text: string, enabled: boolean): boolean {
+  return enabled && /(?:^|[^\p{L}\p{N}_])mute(?=$|[^\p{L}\p{N}_])/iu.test(text);
+}

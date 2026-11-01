@@ -10,7 +10,12 @@ export function cleanSettings(value: unknown): Settings {
   const data = value as Record<string, unknown>;
   // Earlier OS voice identifiers are intentionally discarded during migration.
   const voice = text(data.voice ?? '', 50);
-  return { ...defaultSettings, voice: /^[a-z]*$/.test(voice) ? voice : '', model: text(data.model ?? defaultSettings.model, 150),
+  return { ...defaultSettings, voiceProvider: data.voiceProvider === 'gemini' ? 'gemini' : 'codex',
+    answerProvider: data.answerProvider === 'gemini' ? 'gemini' : 'codex',
+    geminiAnswerModel: text(data.geminiAnswerModel ?? defaultSettings.geminiAnswerModel, 150).trim() || defaultSettings.geminiAnswerModel,
+    geminiModel: text(data.geminiModel ?? defaultSettings.geminiModel, 150).trim() || defaultSettings.geminiModel,
+    geminiVoice: text(data.geminiVoice ?? defaultSettings.geminiVoice, 50).trim() || defaultSettings.geminiVoice,
+    voice: /^[a-z]*$/.test(voice) ? voice : '', model: text(data.model ?? defaultSettings.model, 150),
     prompt: text(data.prompt ?? defaultSettings.prompt, 8000), codexPath: text(data.codexPath ?? '', 2000),
     inputDevice: text(data.inputDevice ?? '', 300),
     reasoningEffort: ['low','medium','high','xhigh'].includes(String(data.reasoningEffort)) ? data.reasoningEffort as Settings['reasoningEffort'] : defaultSettings.reasoningEffort,
@@ -23,6 +28,7 @@ export function cleanSettings(value: unknown): Settings {
     compactAtTokens: typeof data.compactAtTokens === 'number' && Number.isFinite(data.compactAtTokens) ? Math.min(700000,Math.max(8000,Math.floor(data.compactAtTokens))) : defaultSettings.compactAtTokens,
     voiceCatchUp: data.voiceCatchUp === 'fast' || data.voiceCatchUp === 'burst' ? data.voiceCatchUp : 'realtime',
     voiceAckFiller: data.voiceAckFiller !== false,
+    voiceAutoMute: data.voiceAutoMute === true,
     standbyWakeMs: typeof data.standbyWakeMs === 'number' && Number.isFinite(data.standbyWakeMs) ? Math.min(2000,Math.max(100,Math.floor(data.standbyWakeMs))) : defaultSettings.standbyWakeMs,
     standbyFalseWakeSeconds: typeof data.standbyFalseWakeSeconds === 'number' && Number.isFinite(data.standbyFalseWakeSeconds) ? Math.min(120,Math.max(0,Math.floor(data.standbyFalseWakeSeconds))) : defaultSettings.standbyFalseWakeSeconds,
     standbyAfterSeconds: typeof data.standbyAfterSeconds === 'number' && Number.isFinite(data.standbyAfterSeconds) ? Math.min(600,Math.max(0,Math.floor(data.standbyAfterSeconds))) : defaultSettings.standbyAfterSeconds };

@@ -1,9 +1,11 @@
 import BrowserPanel from './BrowserPanel';
+import GeminiModelSelect from './GeminiModelSelect';
+import { geminiLiveModels, geminiAnswerModels, geminiVoices } from '../gemini';
 import type { BrowserState } from '../browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { defaultSettings, type AppEvent, type DesktopAPI, type DocumentFolder, type DocumentInfo, type DocumentSource, type Settings, type Status, type TranscriptEntry, type WorkspaceState, type ToolActivity, type PDFToolRequest, type DebugLog, type ChatSummary } from '../shared';
 import { VoiceSession, type LiveEvent } from './voice';
-import { CaptionGroups, EchoFilter } from './voice-input';
+import { CaptionGroups, EchoFilter, shouldAutoMute } from './voice-input';
 import { pointerContext } from './pointer-context';
 import DocumentViewer, { MarkdownView } from './DocumentViewer';
 import GlassTeXEditor from './GlassTeXEditor';
@@ -120,6 +122,9 @@ export default function App() {
   const [draft, setDraft] = useState<Settings>({ ...defaultSettings });
   const [saving, setSaving] = useState(false);
   const [settingsError, setSettingsError] = useState('');
+  const [geminiKey, setGeminiKey] = useState('');
+  const [keySaving, setKeySaving] = useState(false);
+  const [keyError, setKeyError] = useState('');
   const settingsOpenRef = useRef(false);
   const settingsErrorRef = useRef('');
   const settingsCommitted = useRef<Settings>({ ...defaultSettings });
@@ -186,7 +191,10 @@ export default function App() {
         return entry ? old.map(item => item.id === id ? { ...item, text: item.text + delta } : item)
           : [...old, { id, role, text: text.trimStart(), time, final: true }];
       });
-      if (role === 'user' && phaseRef.current !== 'speaking') changePhase('thinking');
+      if (role === 'user' && shouldAutoMute(text, settingsCommitted.current.voiceAutoMute)) {
+        mutedRef.current = true; setMuted(true); call.current?.muteInput(true);
+        if (phaseRef.current !== 'speaking') changePhase('idle');
+      } else if (role === 'user' && phaseRef.current !== 'speaking') changePhase('thinking');
       return;
     }
     if (event.type === 'error' || event.type === 'session.error') {
@@ -216,6 +224,7 @@ export default function App() {
       },
       error: e => { if (token === operation.current) { setError(errorMessage(e)); void endSession(); } }
     }, () => !typedPending.current && !backendWorking.current && (phaseRef.current === 'listening' || phaseRef.current === 'idle'));
+    current.setProvider(status?.settings.voiceProvider ?? 'codex');
     call.current = current; current.muteOutput(!speakerRef.current);
     current.setStandby(status?.settings.standbyAfterSeconds ?? 0);
     if (status) current.setExperiments(standbyExperiments(status.settings));
@@ -438,7 +447,7 @@ export default function App() {
       try {
         await endSession();
         const saved = await api().saveSettings(next);
-        const executableChanged = saved.codexPath !== settingsCommitted.current.codexPath;
+        const executableChanged = saved.codexPath !== settingsCommitted.current.codexPath || saved.voiceProvider !== settingsCommitted.current.voiceProvider;
         settingsCommitted.current = saved;
         setStatus(old => old ? { ...old, settings: saved } : old);
         if (executableChanged) setStatus(await api().status());
@@ -459,7 +468,18 @@ export default function App() {
     settingsDraft.current = next; setDraft(next);
     if (save) persistSettings(next);
   }
+  async function saveGeminiKey(value: string) {
+    setKeySaving(true); setKeyError('');
+    try {
+      await settingsQueue.current;
+      await endSession();
+      await api().saveGeminiKey(value);
+      setGeminiKey(''); setStatus(await api().status());
+    } catch (error) { setKeyError(errorMessage(error)); }
+    finally { setKeySaving(false); }
+  }
   async function closeSettings() {
+    if (keySaving) return;
     if (JSON.stringify(settingsDraft.current)!==JSON.stringify(settingsCommitted.current)) persistSettings(settingsDraft.current);
     await settingsQueue.current;
     if (settingsErrorRef.current) return;
@@ -478,7 +498,7 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [accountState, refresh]);
   const title: Record<Phase, string> = { idle: muted && sessionOn ? 'Take your time.' : 'A little room\nto think aloud.', starting: 'One moment.', standby: 'Standing by.', listening: 'I’m listening.', thinking: 'I’m listening.', speaking: 'Let’s talk.' };
-  const caption: Record<Phase, string> = { idle: muted && sessionOn ? 'Your microphone is muted. Unmute whenever you’re ready.' : 'Bring a question. Follow a thought. See where it goes.', starting: 'Connecting your subscription voice session…', standby: 'Voice is paused to save usage. Start talking and it reconnects.', listening: 'Speak naturally. You can interrupt by talking.', thinking: 'Speak naturally. You can interrupt by talking.', speaking: 'Keep talking whenever a thought comes to you.' };
+  const caption: Record<Phase, string> = { idle: muted && sessionOn ? 'Your microphone is muted. Unmute whenever you’re ready.' : 'Bring a question. Follow a thought. See where it goes.', starting: status?.settings.voiceProvider === 'gemini' ? 'Connecting Gemini Live…' : 'Connecting your subscription voice session…', standby: 'Voice is paused to save usage. Start talking and it reconnects.', listening: 'Speak naturally. You can interrupt by talking.', thinking: 'Speak naturally. You can interrupt by talking.', speaking: 'Keep talking whenever a thought comes to you.' };
   const buttonLabel = sessionOn ? 'End voice (Esc)' : 'Start a conversation';
   const activeFile=workspace?.files.find(file=>file.id===workspace.activeId);
   const presentation=workspace?.artifacts.find(item=>item.id===presentationId);
@@ -685,8 +705,9 @@ export default function App() {
       <section className="settings-section"><h3>Think</h3>
         <h4>Answer generator</h4>
         <div className="settings-grid">
-          <label className="field"><span>Model</span><select name="answerModel" value={draft.model} onChange={event=>updateSettings({model:event.target.value})}><option value="">Codex default</option>{draft.model&&!status?.models.some(model=>model.model===draft.model)&&<option value={draft.model}>{draft.model==='gpt-6.1-sol'?'GPT-6.1 Sol':draft.model}</option>}{status?.models.map(model=><option key={model.model} value={model.model}>{model.displayName}</option>)}</select></label>
-          <label className="field"><span>Thinking effort</span><select name="answerEffort" value={draft.reasoningEffort} onChange={event=>updateSettings({reasoningEffort:event.target.value as Settings['reasoningEffort']})}>{['low','medium','high','xhigh'].map(effort=><option key={effort} value={effort}>{effort==='xhigh'?'Extra high':effort.charAt(0).toUpperCase()+effort.slice(1)}</option>)}</select></label>
+          <label className="field"><span>Provider</span><select name="answerProvider" value={draft.answerProvider} onChange={event=>updateSettings({answerProvider:event.target.value as Settings['answerProvider']})}><option value="codex">Codex (ChatGPT subscription)</option><option value="gemini">Gemini</option></select></label>
+          {draft.answerProvider==='codex'?<><label className="field"><span>Model</span><select name="answerModel" value={draft.model} onChange={event=>updateSettings({model:event.target.value})}><option value="">Codex default</option>{draft.model&&!status?.models.some(model=>model.model===draft.model)&&<option value={draft.model}>{draft.model==='gpt-6.1-sol'?'GPT-6.1 Sol':draft.model}</option>}{status?.models.map(model=><option key={model.model} value={model.model}>{model.displayName}</option>)}</select></label></>:<GeminiModelSelect key={`answer:${settingsOpen}`} name="geminiAnswerModel" label="Model" value={draft.geminiAnswerModel} models={status?.geminiModels?.answer??geminiAnswerModels} onChange={(value,save)=>updateSettings({geminiAnswerModel:value},save)} onCommit={()=>persistSettings(settingsDraft.current)}/>}
+          <label className="field"><span>Thinking effort</span><select name="answerEffort" value={draft.reasoningEffort} onChange={event=>updateSettings({reasoningEffort:event.target.value as Settings['reasoningEffort']})}>{['low','medium','high','xhigh'].map(effort=><option key={effort} value={effort}>{effort==='xhigh'?(draft.answerProvider==='gemini'?'High (Gemini maximum)':'Extra high'):effort.charAt(0).toUpperCase()+effort.slice(1)}</option>)}</select></label>
         </div>
         <h4>Quiz generator</h4>
         <div className="settings-grid">
@@ -697,27 +718,44 @@ export default function App() {
         <div className="settings-grid">
           <label className="field"><span>Compact context at</span><NumberSetting min={8000} max={700000} step={4000} value={draft.compactAtTokens} open={settingsOpen} onValue={value=>updateSettings({compactAtTokens:value},false)} onCommit={()=>persistSettings(settingsDraft.current)}/></label>
           <label className="check-setting"><input type="checkbox" checked={draft.autoCompact} onChange={event=>updateSettings({autoCompact:event.target.checked})}/><span>Auto compact</span></label>
-          <label className="check-setting"><input type="checkbox" checked={draft.priority} onChange={event=>updateSettings({priority:event.target.checked})}/><span>Fast / Priority</span></label>
+          <label className="check-setting" title="Priority applies to Codex generators"><input type="checkbox" checked={draft.priority} onChange={event=>updateSettings({priority:event.target.checked})}/><span>Fast / Priority</span></label>
         </div>
         <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.proactiveExplain} onChange={event=>updateSettings({proactiveExplain:event.target.checked})}/><span>Show answers on the page<small>When you ask about a PDF, the answer is highlighted automatically, with an explanation or interactive beside it when that helps.</small></span></label>
       </section>
       <section className="settings-section"><h3>Voice</h3>
         <div className="settings-grid">
-          <label className="field"><span>Voice</span><select value={draft.voice} onChange={event=>updateSettings({voice:event.target.value})}><option value="">Service default</option>{status?.voices.map(voice=><option key={voice.id} value={voice.id}>{voice.name}</option>)}</select></label>
+          <label className="field"><span>Voice provider</span><select name="voiceProvider" value={draft.voiceProvider} onChange={event=>updateSettings({voiceProvider:event.target.value as Settings['voiceProvider']})}><option value="codex">GPT-Live (ChatGPT subscription)</option><option value="gemini">Gemini Live</option></select></label>
+          {draft.voiceProvider==='codex'&&<label className="field"><span>Voice</span><select value={draft.voice} onChange={event=>updateSettings({voice:event.target.value})}><option value="">Service default</option>{status?.voices.map(voice=><option key={voice.id} value={voice.id}>{voice.name}</option>)}</select></label>}
           <label className="field"><span>Microphone</span><select value={draft.inputDevice} onChange={event=>updateSettings({inputDevice:event.target.value})}><option value="">System default</option>{devices.filter(device=>device.deviceId&&device.deviceId!=='default').map(device=><option key={device.deviceId} value={device.deviceId}>{device.label||'Microphone'}</option>)}</select></label>
         </div>
+        {draft.voiceProvider==='gemini'&&<>
+          <div className="settings-grid">
+            <GeminiModelSelect key={`live:${settingsOpen}`} name="geminiModel" label="Gemini model" value={draft.geminiModel} models={status?.geminiModels?.live??geminiLiveModels} onChange={(value,save)=>updateSettings({geminiModel:value},save)} onCommit={()=>persistSettings(settingsDraft.current)}/>
+            <label className="field"><span>Gemini voice</span><select name="geminiVoice" value={draft.geminiVoice} onChange={event=>updateSettings({geminiVoice:event.target.value})}>{geminiVoices.map(name=><option key={name} value={name}>{name}</option>)}</select></label>
+          </div>
+
+        </>}
+        <label className="check-setting voice-tools-setting"><input type="checkbox" name="voiceAutoMute" checked={draft.voiceAutoMute} onChange={event=>updateSettings({voiceAutoMute:event.target.checked})}/><span>Mute when I say “mute”<small>Automatically mute the microphone when you say “mute”. Use the microphone button to unmute.</small></span></label>
+        {draft.voiceProvider==='codex'&&<>
         <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.agentTools} onChange={event=>updateSettings({agentTools:event.target.checked})}/><span>Voice agent tools<small>Voice highlights, points, and reads quiz progress directly. Think still writes quizzes, explanations, and edits.</small></span></label>
         <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.bridgeResearch} onChange={event=>updateSettings({bridgeResearch:event.target.checked})}/><span>Voice research<small>Voice can read open files and search the web for quick answers. Bigger work still goes to Think.</small></span></label>
+        </>}
         <h4>Usage saving (experimental)</h4>
         <div className="settings-grid">
           <label className="field" title="Closes the live voice connection after this much quiet to save usage; talking reconnects it. 0 keeps it open."><span>Standby after (seconds, 0 = never)</span><NumberSetting min={0} max={600} step={15} value={draft.standbyAfterSeconds} open={settingsOpen} onValue={value=>updateSettings({standbyAfterSeconds:value},false)} onCommit={()=>persistSettings(settingsDraft.current)}/></label>
-          <label className="field" title="How what you said while it reconnected reaches the voice. Real time adds the reconnect time to the first reply. Faster replays at 1.3× (slightly higher pitch) until caught up. Burst sends it all at once through an experimental Codex call and falls back to real time if that fails."><span>Catch-up after standby</span><select value={draft.voiceCatchUp} onChange={event=>updateSettings({voiceCatchUp:event.target.value as Settings['voiceCatchUp']})}><option value="realtime">Replay in real time</option><option value="fast">Replay faster (1.3×)</option><option value="burst">Send as burst (experimental)</option></select></label>
+          <label className="field" title="How what you said while it reconnected reaches the voice. Real time adds the reconnect time to the first reply. Faster replays at 1.3× (slightly higher pitch) until caught up. Burst sends it all at once to the voice service and falls back to real time if that fails."><span>Catch-up after standby</span><select value={draft.voiceCatchUp} onChange={event=>updateSettings({voiceCatchUp:event.target.value as Settings['voiceCatchUp']})}><option value="realtime">Replay in real time</option><option value="fast">Replay faster (1.3×)</option><option value="burst">Send as burst (experimental)</option></select></label>
           <label className="field" title="How much speech it needs to hear before waking from standby. Higher ignores coughs and short noises."><span>Wake after speech of (ms)</span><NumberSetting min={100} max={2000} step={50} value={draft.standbyWakeMs} open={settingsOpen} onValue={value=>updateSettings({standbyWakeMs:value},false)} onCommit={()=>persistSettings(settingsDraft.current)}/></label>
           <label className="field" title="If a wake hears no words within this time, it goes back to standby. 0 turns it off."><span>Re-sleep on false wake (seconds, 0 = off)</span><NumberSetting min={0} max={120} step={5} value={draft.standbyFalseWakeSeconds} open={settingsOpen} onValue={value=>updateSettings({standbyFalseWakeSeconds:value},false)} onCommit={()=>persistSettings(settingsDraft.current)}/></label>
         </div>
         <label className="check-setting voice-tools-setting"><input type="checkbox" checked={draft.voiceAckFiller} onChange={event=>updateSettings({voiceAckFiller:event.target.checked})}/><span>Spoken “let me check” filler<small>Off skips the acknowledgement voice says before handing a request to the bridge. Applies from the next voice connection.</small></span></label>
         <label className="field wide"><span>Voice instructions</span><textarea rows={4} maxLength={8000} value={draft.prompt} onChange={event=>updateSettings({prompt:event.target.value},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
       </section>
+      {(draft.voiceProvider==='gemini'||draft.answerProvider==='gemini')&&<section className="settings-section"><h3>Gemini API</h3>
+          <label className="field wide"><span>Gemini API key</span><input type="password" name="geminiApiKey" autoComplete="off" maxLength={500} value={geminiKey} placeholder={status?.geminiKeyConfigured?'Key configured · enter a replacement':'Paste your Google AI Studio API key'} onChange={event=>{setGeminiKey(event.target.value);setKeyError('');}}/></label>
+          <div className="settings-grid"><button className="button-secondary" disabled={keySaving||!geminiKey.trim()} onClick={()=>void saveGeminiKey(geminiKey)}>{keySaving?'Saving…':'Save key'}</button>{status?.geminiKeyConfigured&&<button className="button-secondary" disabled={keySaving} onClick={()=>void saveGeminiKey('')}>Remove saved key</button>}</div>
+          {keyError&&<p className="dialog-error" role="alert">{keyError}</p>}
+          <p className="settings-intro">{status?.geminiKeyConfigured?'API key configured. ':'Add a key to enable Gemini Live. '}Keys are encrypted on this device. Gemini uses your Google API quota; Gemini answers and voice share this key. Quiz generation and the Codex bridge use your ChatGPT sign-in.</p>
+      </section>}
       <details className="settings-section advanced"><summary>Advanced</summary>
         <label className="field wide"><span>Codex executable</span><input value={draft.codexPath} placeholder="Use bundled Codex" onChange={event=>updateSettings({codexPath:event.target.value},false)} onBlur={()=>persistSettings(settingsDraft.current)}/></label>
       </details>

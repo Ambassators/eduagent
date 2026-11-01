@@ -1,7 +1,13 @@
 import type { BrowserState, BrowserBounds, CookieImportResult, CookieImportSource } from './browser.js';
 import type { QuizAnswerInput, QuizState, QuizSource } from './quiz.js';
 import type { TeXSettings } from './glasstex.js';
+import type { GeminiModelOption } from './gemini.js';
 export interface Settings {
+  voiceProvider: 'codex' | 'gemini';
+  geminiModel: string;
+  geminiVoice: string;
+  answerProvider: 'codex' | 'gemini';
+  geminiAnswerModel: string;
   voice: string;
   model: string;
   prompt: string;
@@ -29,12 +35,16 @@ export interface Settings {
   voiceCatchUp: 'realtime' | 'fast' | 'burst';
   /** Spoken acknowledgement ("let me check") when voice hands a request to the bridge. */
   voiceAckFiller: boolean;
+  /** Opt-in: mute microphone input when a spoken transcript contains the word "mute". */
+  voiceAutoMute: boolean;
   /** Milliseconds of detected speech needed to wake standby, so coughs and short noises do not reconnect. */
   standbyWakeMs: number;
   /** Return to standby if a wake hears no words within this many seconds. 0 turns it off. */
   standbyFalseWakeSeconds: number;
 }
 export const defaultSettings: Settings = {
+  voiceProvider: 'codex', geminiModel: 'gemini-3.8-live', geminiVoice: 'Kore',
+  answerProvider: 'codex', geminiAnswerModel: 'gemini-3.8-flash',
   voice: '', model: 'gpt-6.1-sol', codexPath: '', inputDevice: '', reasoningEffort: 'medium',
   quizModel: 'gpt-6.1-sol', quizReasoningEffort: 'medium',
   transparency: 'acrylic', theme: 'system', lowPowerMode: true, demoPlacement: 'side', autoCompact: true, compactAtTokens: 200000,
@@ -45,12 +55,15 @@ export const defaultSettings: Settings = {
   standbyAfterSeconds: 60,
   voiceCatchUp: 'realtime',
   voiceAckFiller: true,
+  voiceAutoMute: false,
   standbyWakeMs: 100,
   standbyFalseWakeSeconds: 10,
   prompt: 'You are a thoughtful voice companion in a document workspace. Speak naturally. You already receive the currently open file as quiet context. Answer simple questions directly. For deep reasoning, web search, document edits, or screen demonstrations, delegate to the backend and ask it to call think with an optional message. The Think thread already has the full conversation transcript and current file context; do not repeat them. Keep talking while it works. Only describe completed actions after their tools succeed.'
 };
 export interface ModelOption { model: string; displayName: string; isDefault: boolean; efforts?: string[] }
 export interface Status {
+  geminiKeyConfigured?: boolean;
+  geminiModels?: { live: GeminiModelOption[]; answer: GeminiModelOption[] };
   connected: boolean;
   account: { type: string; email?: string; name?: string; planType?: string } | null;
   models: ModelOption[];
@@ -136,6 +149,9 @@ export interface DesktopAPI {
   /** resume: reconnecting after standby on the same bridge thread, so its context is still there. */
   startVoice(sdp: string, resume?: boolean): Promise<{threadId: string; sdp: string}>;
   stopVoice(): Promise<void>;
+  saveGeminiKey(key: string): Promise<boolean>;
+  startGeminiVoice(resume?: boolean): Promise<{ sessionId: string }>;
+  geminiActivity(sessionId: string, active: boolean): Promise<void>;
   /** Experimental: base64 16-bit mono PCM sent straight to the live session's input. */
   appendVoiceAudio(data: string, sampleRate: number): Promise<void>;
   /** Adds a line to the debug log panel. */
